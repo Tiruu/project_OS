@@ -889,55 +889,53 @@ const AI_REVIEW_JSON_SCHEMA = {
   },
 } as const;
 
-async function callGemini(
+async function sleep(ms: number): Promise<void> {
+  await new Promise((resolve) => setTimeout(resolve, ms));
+}
+
+async function callGeminiWithRetry(
   apiKey: string,
   model: string,
   thinkingLevel: "minimal" | "low" | "medium" | "high",
   input: string,
   instructions: string,
 ): Promise<GeminiInteractionResponse> {
-  const url =
-    "https://generativelanguage.googleapis.com/v1beta/interactions";
+  const delays = [0, 1500, 3500, 7000];
 
-  let response: Response;
+  let lastError: unknown = null;
 
-  try {
-    response = await fetch(url, {
-      method: "POST",
-      headers: {
-        "Content-Type": "application/json",
-        "x-goog-api-key": apiKey,
-      },
-      body: JSON.stringify({
+  for (const delay of delays) {
+    if (delay > 0) {
+      await sleep(delay);
+    }
+
+    try {
+      return await callGemini(
+        apiKey,
         model,
+        thinkingLevel,
         input,
-        system_instruction: instructions,
-        response_format: {
-          type: "text",
-          mime_type: "application/json",
-          schema: AI_REVIEW_JSON_SCHEMA,
-        },
-        generation_config: {
-          thinking_level: thinkingLevel,
-        },
-        store: false,
-      }),
-    });
-  } catch {
-    throw new Error(
-      "Impossible de joindre l'API Gemini Interactions. Vérifie ta connexion et ta clé GEMINI_API_KEY.",
-    );
+        instructions,
+      );
+    } catch (error) {
+      lastError = error;
+
+      if (
+        !(
+          error instanceof Error &&
+          error.message.startsWith("GEMINI_SERVICE_UNAVAILABLE:")
+        )
+      ) {
+        throw error;
+      }
+    }
   }
 
-  if (!response.ok) {
-    const errorBody = await response.text();
-    throw new Error(
-      "Gemini API " + response.status + " : " + errorBody.slice(0, 500),
-    );
-  }
-
-  return (await response.json()) as GeminiInteractionResponse;
+  throw lastError instanceof Error
+    ? lastError
+    : new Error("Gemini reste indisponible après plusieurs tentatives.");
 }
+
 
 function getGeminiContent(
   response: GeminiInteractionResponse & {
@@ -976,7 +974,7 @@ async function requestGeminiReview(
   input: string,
   instructions: string,
 ): Promise<GeminiInteractionResponse> {
-  return callGemini(
+  return callGeminiWithRetry(
     apiKey,
     model,
     thinkingLevel,
