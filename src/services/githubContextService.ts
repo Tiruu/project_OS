@@ -497,6 +497,7 @@ function selectContextFiles(
   tree: GithubTreeEntry[],
   readmePath: string | null,
   packageJsonPath: string | null,
+  focusText: string | null = null,
 ): Array<{ path: string; reason: string }> {
   const candidates = tree
     .filter((entry) => entry.type === "blob")
@@ -606,6 +607,7 @@ export async function getGithubRepositoryContext(
     tree,
     readmePath,
     packageJsonPath,
+    focusText,
   );
 
   const selectedFiles: GithubContextFile[] = [];
