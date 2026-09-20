@@ -13,6 +13,7 @@ import { projectStartCommand } from "./commands/projectStart.js";
 import { projectNextCommand } from "./commands/projectNext.js";
 import { projectGithubCommand } from "./commands/projectGithub.js";
 import { projectGithubSyncCommand } from "./commands/projectGithubSync.js";
+import { projectImportGithubCommand } from "./commands/projectImportGithub.js";
 
 const token = process.env.DISCORD_TOKEN;
 const clientId = process.env.DISCORD_CLIENT_ID;
@@ -45,6 +46,7 @@ await rest.put(Routes.applicationGuildCommands(clientId, guildId), {
     projectNextCommand.data.toJSON(),
     projectGithubCommand.data.toJSON(),
     projectGithubSyncCommand.data.toJSON(),
+    projectImportGithubCommand.data.toJSON(),
   ],
 });
 
