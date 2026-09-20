@@ -1,6 +1,21 @@
 import { SlashCommandBuilder, } from "discord.js";
 import { getProjects } from "../../services/projectService.js";
 import { getProjectDashboard } from "../../services/projectDashboardService.js";
+function formatActivityDate(occurredAt) {
+    if (typeof occurredAt !== "string") {
+        return "";
+    }
+    const date = new Date(occurredAt);
+    if (Number.isNaN(date.getTime())) {
+        return "";
+    }
+    return ` — ${date.toLocaleString("fr-FR", {
+        day: "2-digit",
+        month: "2-digit",
+        hour: "2-digit",
+        minute: "2-digit",
+    })}`;
+}
 export const projectShowCommand = {
     data: new SlashCommandBuilder()
         .setName("project-show")
@@ -16,44 +31,49 @@ export const projectShowCommand = {
         const lines = [
             `# ${dashboard.project.name}`,
             "",
-            `**État**`,
+            "**État**",
             dashboard.project.current_state ?? "Non défini",
             "",
-            `**Type**`,
+            "**Type**",
             dashboard.project.type,
             "",
-            `**Technologies**`,
+            "**Technologies**",
             dashboard.project.technologies.length > 0
                 ? dashboard.project.technologies.join(", ")
                 : "Aucune",
             "",
-            `**Description**`,
+            "**Description**",
             dashboard.project.description ?? "Aucune",
             "",
-            `**Tâches**`,
+            "**GitHub**",
+            ...(dashboard.githubRepositories.length > 0
+                ? dashboard.githubRepositories.map((repository) => `• ${repository.owner}/${repository.repository} — ${repository.url}`)
+                : ["Aucun dépôt connecté"]),
+            "",
+            "**Tâches**",
             `Terminées : ${dashboard.doneTasks.length}`,
             `En cours : ${dashboard.inProgressTasks.length}`,
             `À faire : ${dashboard.todoTasks.length}`,
             "",
-            `**Prochaines tâches**`,
+            "**Prochaines tâches**",
             ...(dashboard.todoTasks.length > 0
                 ? dashboard.todoTasks
                     .slice(0, 5)
                     .map((task) => `• ${task.title} — priorité ${task.priority}`)
                 : ["Aucune"]),
             "",
-            `**Décisions actives**`,
+            "**Décisions actives**",
             ...(dashboard.activeDecisions.length > 0
                 ? dashboard.activeDecisions
                     .slice(0, 5)
                     .map((decision) => `• ${decision.title}`)
                 : ["Aucune"]),
             "",
-            `**Activité récente**`,
+            "**Activité récente**",
             ...(dashboard.recentActivities.length > 0
                 ? dashboard.recentActivities
                     .slice(0, 5)
-                    .map((activity) => `• ${activity.title}`)
+                    .map((activity) => `• ${activity.title}${formatActivityDate(activity.metadata.occurred_at)}`)
                 : ["Aucune"]),
         ];
         await interaction.reply(lines.join("\n"));
