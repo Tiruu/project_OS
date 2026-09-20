@@ -74,6 +74,7 @@ export type GithubRepositoryContext = {
 
 const MAX_TREE_ENTRIES = 250;
 const MAX_SELECTED_FILES = 12;
+const MAX_REFERENCED_FILES = 6;
 const MAX_FILE_CHARS = 8000;
 const MAX_TOTAL_FILE_CHARS = 50000;
 
@@ -294,6 +295,66 @@ function scoreContextFile(path: string): {
   return { score, reason };
 }
 
+function getReferencedContextPaths(
+  selectedFiles: GithubContextFile[],
+  tree: GithubTreeEntry[],
+): string[] {
+  const treePaths = new Set(
+    tree
+      .filter((entry) => entry.type === "blob")
+      .map((entry) => entry.path),
+  );
+
+  const treeByBaseName = new Map<string, string[]>();
+
+  for (const path of treePaths) {
+    const fileName = path.split("/").at(-1) ?? "";
+    const baseName = fileName.includes(".")
+      ? fileName.slice(0, fileName.lastIndexOf(".")).toLowerCase()
+      : fileName.toLowerCase();
+
+    const existing = treeByBaseName.get(baseName) ?? [];
+    existing.push(path);
+    treeByBaseName.set(baseName, existing);
+  }
+
+  const references = new Set<string>();
+  const selectedPaths = new Set(
+    selectedFiles.map((file) => file.path),
+  );
+
+  for (const file of selectedFiles) {
+    const source = file.content;
+
+    const resReferences = source.matchAll(
+      /res:\/\/([A-Za-z0-9_./-]+\.(?:gd|tscn|tres|ts|json|md))/g,
+    );
+
+    for (const match of resReferences) {
+      const path = match[1];
+
+      if (treePaths.has(path) && !selectedPaths.has(path)) {
+        references.add(path);
+      }
+    }
+
+    const identifiers = source.matchAll(
+      /\b[A-Za-z_][A-Za-z0-9_]*\b/g,
+    );
+
+    for (const match of identifiers) {
+      const candidate = match[0].toLowerCase();
+      const possiblePaths = treeByBaseName.get(candidate) ?? [];
+
+      if (possiblePaths.length === 1 && !selectedPaths.has(possiblePaths[0])) {
+        references.add(possiblePaths[0]);
+      }
+    }
+  }
+
+  return [...references].slice(0, MAX_REFERENCED_FILES);
+}
+
 function selectContextFiles(
   tree: GithubTreeEntry[],
   readmePath: string | null,
@@ -447,6 +508,53 @@ export async function getGithubRepositoryContext(
     selectedFiles.push({
       path: selected.path,
       reason: selected.reason,
+      content,
+    });
+
+    totalChars += content.length;
+  }
+
+  const referencedPaths = getReferencedContextPaths(
+    selectedFiles,
+    tree,
+  );
+
+  for (const path of referencedPaths) {
+    if (selectedFiles.length >= MAX_SELECTED_FILES + MAX_REFERENCED_FILES) {
+      break;
+    }
+
+    if (totalChars >= MAX_TOTAL_FILE_CHARS) {
+      break;
+    }
+
+    const file = await getOptionalGithubFile<GithubContentFile>(
+      repositoryUrl +
+        "/contents/" +
+        encodeURIComponent(path) +
+        "?ref=" +
+        encodeURIComponent(remote.default_branch),
+    );
+
+    if (!file) {
+      continue;
+    }
+
+    const content = decodeGithubContent(file).slice(
+      0,
+      Math.min(
+        MAX_FILE_CHARS,
+        MAX_TOTAL_FILE_CHARS - totalChars,
+      ),
+    );
+
+    if (!content.trim()) {
+      continue;
+    }
+
+    selectedFiles.push({
+      path,
+      reason: "Fichier référencé par un fichier déjà sélectionné",
       content,
     });
 
