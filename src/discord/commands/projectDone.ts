@@ -4,8 +4,10 @@ import {
   SlashCommandBuilder,
 } from "discord.js";
 
-import { getTasks } from "../../services/taskService.js";
-import { completeTask } from "../../services/taskService.js";
+import {
+  completeTask,
+  getTasks,
+} from "../../services/taskService.js";
 
 export const projectDoneCommand = {
   data: new SlashCommandBuilder()
@@ -27,12 +29,23 @@ export const projectDoneCommand = {
     ),
 
   async execute(interaction: ChatInputCommandInteraction): Promise<void> {
+    const projectId = interaction.options.getString("projet", true);
     const taskId = interaction.options.getString("tache", true);
 
-    const task = await completeTask(taskId);
+    const tasks = await getTasks(projectId);
+    const task = tasks.find((item) => item.id === taskId);
+
+    if (!task) {
+      await interaction.reply(
+        "Tâche introuvable dans ce projet. Sélectionne une tâche proposée par l'autocomplete.",
+      );
+      return;
+    }
+
+    const completedTask = await completeTask(task.id);
 
     await interaction.reply(
-      `Tâche terminée dans le projet : **${task.title}**`,
+      `Tâche terminée dans le projet : **${completedTask.title}**`,
     );
   },
 
@@ -52,7 +65,10 @@ export const projectDoneCommand = {
           )
           .slice(0, 25)
           .map((project) => ({
-            name: project.name,
+            name:
+              project.name.length > 100
+                ? project.name.slice(0, 97) + "..."
+                : project.name,
             value: project.id,
           }));
 
@@ -77,7 +93,10 @@ export const projectDoneCommand = {
           )
           .slice(0, 25)
           .map((task) => ({
-            name: task.title,
+            name:
+              task.title.length > 100
+                ? task.title.slice(0, 97) + "..."
+                : task.title,
             value: task.id,
           }));
 
