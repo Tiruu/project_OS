@@ -5,6 +5,7 @@ import {
 } from "discord.js";
 
 import { getGithubRepositories } from "../../services/githubRepositoryService.js";
+import { getActivities } from "../../services/activityService.js";
 import { getProjects } from "../../services/projectService.js";
 import { getGithubRepositoryContext } from "../../services/githubContextService.js";
 import { reviewProjectWithAI } from "../../services/aiService.js";
@@ -26,7 +27,8 @@ export const projectAiReviewCommand = {
 
     await interaction.deferReply();
 
-    const project = await (async () => {
+    try {
+      const project = await (async () => {
       const projects = await getProjects();
       const found = projects.find((item) => item.id === projectId);
 
@@ -34,10 +36,10 @@ export const projectAiReviewCommand = {
         throw new Error("Projet introuvable.");
       }
 
-      return found;
-    })();
+        return found;
+      })();
 
-    const repositories = await getGithubRepositories(project.id);
+      const repositories = await getGithubRepositories(project.id);
 
     if (repositories.length === 0) {
       throw new Error(
@@ -46,10 +48,27 @@ export const projectAiReviewCommand = {
     }
 
     const repository = repositories[0];
-    const context = await getGithubRepositoryContext(
-      repository.owner,
-      repository.repository,
-    );
+
+    const [context, activities] = await Promise.all([
+      getGithubRepositoryContext(
+        repository.owner,
+        repository.repository,
+      ),
+      getActivities(project.id),
+    ]);
+
+    context.project = {
+      name: project.name,
+      type: project.type,
+      technologies: project.technologies,
+      description: project.description,
+      current_state: project.current_state,
+    };
+
+    context.recent_activity = activities
+      .filter((activity) => activity.source === "GITHUB")
+      .slice(0, 10)
+      .map((activity) => activity.title);
 
     const review = await reviewProjectWithAI(context);
 
@@ -88,7 +107,16 @@ export const projectAiReviewCommand = {
         : ["Aucune"]),
     ];
 
-    await interaction.editReply(lines.join("\n"));
+      await interaction.editReply(lines.join("\n"));
+    } catch (error) {
+      console.error("Erreur analyse IA :", error);
+
+      await interaction.editReply(
+        error instanceof Error
+          ? `Analyse IA impossible : ${error.message}`
+          : "Analyse IA impossible.",
+      );
+    }
   },
 
   async autocomplete(interaction: AutocompleteInteraction): Promise<void> {
