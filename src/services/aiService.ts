@@ -1484,6 +1484,80 @@ async function reviewProjectWithOllama(
   );
 }
 
+export async function askProjectWithAI(
+  context: ProjectAiContext,
+  question: string,
+): Promise<string> {
+  const input = JSON.stringify({
+    question,
+    project_os: context.project_os,
+    repository: context.repository,
+    repository_tree: context.repository_tree.slice(0, 120),
+    selected_files: context.selected_files.map((file) => ({
+      path: file.path,
+      reason: file.reason,
+      content: file.content,
+    })),
+    readme: context.readme,
+    package_json: context.package_json,
+  });
+
+  const instructions = [
+    "Tu es l'assistant de contexte de Project OS.",
+    "Réponds en français, directement à la question.",
+    "Utilise uniquement les éléments présents dans le contexte fourni.",
+    "Distingue les faits observés des déductions.",
+    "Ne prétends pas avoir exécuté le projet si le contexte ne le démontre pas.",
+    "Quand une information manque, dis précisément qu'elle n'est pas déterminable à partir du contexte fourni.",
+    "Donne des références de fichiers quand elles sont disponibles.",
+  ].join("\n");
+
+  const provider = getAiProvider();
+
+  if (provider === "gemini") {
+    const config = getGeminiConfig();
+    try {
+      const response = await callGemini(
+        config.apiKey,
+        config.model,
+        config.thinkingLevel,
+        input,
+        instructions,
+      );
+      return getGeminiContent(response) || "Aucune réponse exploitable.";
+    } catch (error) {
+      if (error instanceof Error && error.message.startsWith("GEMINI_RATE_LIMIT")) {
+        const response = await callOllama(
+          getOllamaConfig().url,
+          {
+            model: getOllamaConfig().model,
+            stream: false,
+            think: getOllamaConfig().think,
+            messages: [
+              { role: "system", content: instructions },
+              { role: "user", content: input },
+            ],
+          },
+        );
+        return response.message?.content?.trim() || "Aucune réponse exploitable.";
+      }
+      throw error;
+    }
+  }
+
+  const config = getOllamaConfig();
+  const response = await callOllama(config.url, {
+    model: config.model,
+    stream: false,
+    think: config.think,
+    messages: [
+      { role: "system", content: instructions },
+      { role: "user", content: input },
+    ],
+  });
+  return response.message?.content?.trim() || "Aucune réponse exploitable.";
+}
+
 export async function reviewProjectWithAI(
   context: ProjectAiContext,
 ): Promise<AiReview> {
