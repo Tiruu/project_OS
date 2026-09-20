@@ -267,7 +267,7 @@ function assertRawReview(value: unknown): RawAiReview {
         contradiction.confidence <= 1 &&
         contradiction.title.trim().length > 0 &&
         contradiction.description.trim().length > 0 &&
-        contradiction.evidence.length > 0,
+        contradiction.evidence.length >= 2,
     )
     .slice(0, 5);
 
