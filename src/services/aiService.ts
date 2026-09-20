@@ -203,7 +203,7 @@ function assertRawReview(value: unknown): RawAiReview {
 
   const suggestedTasks: RawAiSuggestedTask[] = review.suggested_tasks
     .filter(
-      (task): task is AiSuggestedTask =>
+      (task): task is RawAiSuggestedTask =>
         !!task &&
         typeof task === "object" &&
         typeof task.title === "string" &&
