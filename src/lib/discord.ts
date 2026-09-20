@@ -156,6 +156,12 @@ export async function startDiscord(): Promise<void> {
         return;
       }
 
+      if (interaction.commandName === "project-ask") {
+        const { projectAskCommand } = await import("../discord/commands/projectAsk.js");
+        await projectAskCommand.execute(interaction);
+        return;
+      }
+
       if (interaction.commandName === "project-ai-review") {
           const { projectAiReviewCommand } =
             await import("../discord/commands/projectAiReview.js");
