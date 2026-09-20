@@ -6,7 +6,7 @@ import type {
   AiSuggestedTask,
   AiTaskKind,
 } from "../types/aiReview.js";
-import type { GithubRepositoryContext } from "./githubContextService.js";
+import type { ProjectAiContext } from "./projectAiContextService.js";
 
 type OllamaChatResponse = {
   model?: string;
@@ -41,6 +41,13 @@ type RawAiSuggestedTask = {
   confidence: number;
 };
 
+type RawAiContradiction = {
+  title: string;
+  description: string;
+  evidence: string[];
+  confidence: number;
+};
+
 type RawAiReview = {
   summary: string;
   purpose: string;
@@ -49,6 +56,7 @@ type RawAiReview = {
   inferred_state: string;
   state_evidence: string[];
   observed_features: RawAiObservedFeature[];
+  contradictions: RawAiContradiction[];
   confidence: number;
   uncertainties: string[];
   suggested_tasks: RawAiSuggestedTask[];
@@ -87,16 +95,15 @@ function buildInstructions(): string {
   return [
     "Tu es l'analyste technique de Project OS.",
     "",
-    "Comprends le dépôt GitHub fourni puis produis une analyse factuelle pour un développeur solo.",
+    "Comprends le dépôt GitHub et le contexte Project OS fourni puis produis une analyse factuelle pour un développeur solo.",
     "",
-    "Sources par ordre de confiance :",
-    "1. contenu réel des fichiers sélectionnés",
-    "2. README et documentation",
-    "3. structure du dépôt",
-    "4. configuration",
-    "5. historique GitHub",
-    "6. métadonnées",
-    "7. données déjà stockées dans Project OS",
+    "Rôle des sources :",
+    "1. Le contenu réel des fichiers sélectionnés est la preuve principale des comportements implémentés.",
+    "2. README, documentation et configuration décrivent le projet mais ne remplacent pas une vérification du code.",
+    "3. Les données Project OS (état, tâches, décisions, activités) sont des faits enregistrés sur le projet ; elles ne prouvent pas à elles seules que le code respecte encore ces éléments.",
+    "4. La structure du dépôt, l'historique GitHub et les métadonnées servent de contexte secondaire.",
+    "",
+    "Ne confonds jamais ce que Project OS déclare avec ce que le code démontre.",
     "",
     "Règles d'analyse :",
     "- Ne considère jamais un nom de fichier, un dossier ou un commit comme preuve suffisante qu'une fonctionnalité existe.",
@@ -105,11 +112,23 @@ function buildInstructions(): string {
     "- technologies contient uniquement les technologies observables ou très solidement déduites.",
     "- observed_features contient 2 à 8 sous-systèmes réellement observés quand c'est possible.",
     "",
+    "Règles de contradictions :",
+    "- Détecte uniquement des contradictions substantielles entre les données Project OS et le code/documentation.",
+    "- Exemples valides : une tâche encore ouverte alors que le comportement ciblé est clairement déjà implémenté ; une décision active qui décrit un comportement contredit par le code fourni ; un état administratif qui contredit fortement ce que montrent les fichiers.",
+    "- Une simple absence, différence de vocabulaire ou différence de niveau de détail n'est pas une contradiction.",
+    "- Une tâche ancienne peut rester valide même si une partie de son objectif existe déjà : ne signale une contradiction que si le conflit est concret.",
+    "- Chaque contradiction doit fournir au moins deux éléments de preuve utiles, représentant les deux côtés du conflit.",
+    "- Tu peux produire ZERO contradiction.",
+    "- Maximum 5 contradictions.",
+    "",
     "Règles de tâches :",
     "- Tu peux proposer ZERO tâche.",
     "- Une fonctionnalité absente n'est PAS automatiquement un problème.",
-    "- Avant de proposer une tâche, vérifie dans le code fourni qu'elle n'est pas déjà implémentée.",
+    "- Avant de proposer une tâche, vérifie dans le code fourni et dans les tâches Project OS qu'elle n'est pas déjà implémentée ou déjà enregistrée.",
     "- Ne propose jamais une amélioration générique sans problème concret.",
+    "- Ne recrée pas une tâche existante sous un autre titre simplement pour la reformuler.",
+    "- Si un problème est déjà une tâche TODO ou IN_PROGRESS, ne le repropose pas sauf si tu identifies un problème distinct et clairement documenté.",
+    "- Une tâche DONE ne doit pas être reproposée sans une nouvelle preuve que le problème est revenu ou a régressé.",
     "- Une tâche doit décrire un problème réel et fournir au moins une preuve précise.",
     "- Les types autorisés sont : BUG, INCOMPLETE, DESIGN_GAP, REFACTOR, DOCUMENTATION, TEST.",
     "- TEST n'est pas justifié simplement parce qu'aucun test n'a été trouvé.",
@@ -120,11 +139,18 @@ function buildInstructions(): string {
     "Réponse :",
     "- Réponds avec un objet JSON valide uniquement.",
     "- Aucun markdown, aucune phrase avant ou après le JSON.",
-    "- Champs obligatoires : summary, purpose, type, technologies, inferred_state, state_evidence, observed_features, confidence, uncertainties, suggested_tasks.",
+    "- Champs obligatoires : summary, purpose, type, technologies, inferred_state, state_evidence, observed_features, contradictions, confidence, uncertainties, suggested_tasks.",
     "- observed_features contient des objets {name, description, evidence}.",
+    "- contradictions contient des objets {title, description, evidence, confidence}.",
     "- suggested_tasks contient des objets {title, task_kind, priority, problem, reason, evidence, confidence}.",
     "- confidence et les confiances de tâches sont entre 0 et 1.",
     "- priority est un entier de 1 à 5.",
+    "",
+    "Preuves :",
+    "- Pour une preuve venant d'un fichier réellement fourni, cite le chemin exact du fichier, par exemple scripts/main.gd.",
+    "- Pour une preuve venant de l'arbre du dépôt mais dont le contenu n'a pas été fourni, cite le chemin exact du fichier.",
+    "- Pour une preuve provenant de Project OS, utilise exactement un préfixe : TASK:<id>, DECISION:<id>, ACTIVITY:<id> ou PROJECT_STATE, suivi si nécessaire de ' — ' puis de l'explication.",
+    "- N'invente jamais un identifiant TASK, DECISION ou ACTIVITY : utilise uniquement ceux présents dans le contexte.",
     "",
     "Format JSON attendu :",
     "{",
@@ -136,6 +162,9 @@ function buildInstructions(): string {
     '  "state_evidence": ["string"],',
     '  "observed_features": [',
     '    {"name": "string", "description": "string", "evidence": ["string"]}',
+    "  ],",
+    '  "contradictions": [',
+    '    {"title": "string", "description": "string", "evidence": ["string"], "confidence": 0.0}',
     "  ],",
     '  "confidence": 0.0,',
     '  "uncertainties": ["string"],',
@@ -192,6 +221,7 @@ function assertRawReview(value: unknown): RawAiReview {
     typeof review.inferred_state !== "string" ||
     !Array.isArray(review.state_evidence) ||
     !Array.isArray(review.observed_features) ||
+    !Array.isArray(review.contradictions) ||
     !Array.isArray(review.uncertainties) ||
     !Array.isArray(review.suggested_tasks) ||
     typeof review.confidence !== "number" ||
@@ -224,6 +254,23 @@ function assertRawReview(value: unknown): RawAiReview {
     )
     .slice(0, 3);
 
+  const contradictions: RawAiContradiction[] = review.contradictions
+    .filter(
+      (contradiction): contradiction is RawAiContradiction =>
+        !!contradiction &&
+        typeof contradiction === "object" &&
+        typeof contradiction.title === "string" &&
+        typeof contradiction.description === "string" &&
+        Array.isArray(contradiction.evidence) &&
+        typeof contradiction.confidence === "number" &&
+        contradiction.confidence >= 0 &&
+        contradiction.confidence <= 1 &&
+        contradiction.title.trim().length > 0 &&
+        contradiction.description.trim().length > 0 &&
+        contradiction.evidence.length > 0,
+    )
+    .slice(0, 5);
+
   const observedFeatures = review.observed_features
     .filter(
       (feature): feature is RawAiObservedFeature =>
@@ -248,6 +295,7 @@ function assertRawReview(value: unknown): RawAiReview {
       (item): item is string => typeof item === "string",
     ),
     observed_features: observedFeatures,
+    contradictions,
     confidence: review.confidence,
     uncertainties: review.uncertainties.filter(
       (item): item is string => typeof item === "string",
@@ -271,9 +319,137 @@ function getBasename(value: string): string {
 
 function resolveEvidence(
   evidence: string,
-  context: GithubRepositoryContext,
+  context: ProjectAiContext,
 ): AiEvidence {
   const normalized = normalizeEvidenceText(evidence);
+  const projectOs = context.project_os;
+
+  const taskMarker = evidence.match(/^TASK:([a-z0-9-]+)/i);
+  if (taskMarker) {
+    const task = projectOs.tasks.find(
+      (item) => item.id.toLowerCase() === taskMarker[1].toLowerCase(),
+    );
+    if (task) {
+      return {
+        kind: "PROJECT_OS",
+        source:
+          "Project OS — tâche : " +
+          task.title +
+          " [" +
+          task.status +
+          "]",
+        claim:
+          evidence
+            .replace(/^TASK:[a-z0-9-]+\s*(?:—|[-:])?\s*/i, "")
+            .trim() || evidence.trim(),
+      };
+    }
+  }
+
+  const decisionMarker = evidence.match(/^DECISION:([a-z0-9-]+)/i);
+  if (decisionMarker) {
+    const decision = projectOs.decisions.find(
+      (item) => item.id.toLowerCase() === decisionMarker[1].toLowerCase(),
+    );
+    if (decision) {
+      return {
+        kind: "PROJECT_OS",
+        source:
+          "Project OS — décision : " +
+          decision.title +
+          " [" +
+          decision.status +
+          "]",
+        claim:
+          evidence
+            .replace(/^DECISION:[a-z0-9-]+\s*(?:—|[-:])?\s*/i, "")
+            .trim() || evidence.trim(),
+      };
+    }
+  }
+
+  const activityMarker = evidence.match(/^ACTIVITY:([a-z0-9-]+)/i);
+  if (activityMarker) {
+    const activity = projectOs.recent_activities.find(
+      (item) => item.id.toLowerCase() === activityMarker[1].toLowerCase(),
+    );
+    if (activity) {
+      return {
+        kind: "PROJECT_OS",
+        source:
+          "Project OS — activité : " +
+          activity.title +
+          " [" +
+          activity.type +
+          "]",
+        claim:
+          evidence
+            .replace(/^ACTIVITY:[a-z0-9-]+\s*(?:—|[-:])?\s*/i, "")
+            .trim() || evidence.trim(),
+      };
+    }
+  }
+
+  if (/^PROJECT_STATE\b/i.test(evidence)) {
+    return {
+      kind: "PROJECT_OS",
+      source:
+        "Project OS — état : " +
+        (projectOs.project.current_state ?? "Non défini"),
+      claim:
+        evidence
+          .replace(/^PROJECT_STATE\s*(?:—|[-:])?\s*/i, "")
+          .trim() || evidence.trim(),
+    };
+  }
+
+  const projectOsMatches = [
+    ...projectOs.tasks.map((item) => ({
+      label: item.title,
+      source:
+        "Project OS — tâche : " +
+        item.title +
+        " [" +
+        item.status +
+        "]",
+    })),
+    ...projectOs.decisions.map((item) => ({
+      label: item.title,
+      source:
+        "Project OS — décision : " +
+        item.title +
+        " [" +
+        item.status +
+        "]",
+    })),
+    ...projectOs.recent_activities.map((item) => ({
+      label: item.title,
+      source:
+        "Project OS — activité : " +
+        item.title +
+        " [" +
+        item.type +
+        "]",
+    })),
+  ]
+    .filter((item) => normalizeEvidenceText(item.label).length >= 8)
+    .sort(
+      (a, b) =>
+        normalizeEvidenceText(b.label).length -
+        normalizeEvidenceText(a.label).length,
+    );
+
+  const projectOsMatch = projectOsMatches.find((item) =>
+    normalized.includes(normalizeEvidenceText(item.label)),
+  );
+
+  if (projectOsMatch) {
+    return {
+      kind: "PROJECT_OS",
+      source: projectOsMatch.source,
+      claim: evidence.trim(),
+    };
+  }
 
   const directSources = [
     ...context.selected_files.map((file) => file.path),
@@ -362,7 +538,7 @@ function resolveEvidence(
 
 function decorateReviewEvidence(
   raw: RawAiReview,
-  context: GithubRepositoryContext,
+  context: ProjectAiContext,
 ): AiReview {
   return {
     summary: raw.summary,
@@ -379,6 +555,14 @@ function decorateReviewEvidence(
       evidence: feature.evidence.map((item) =>
         resolveEvidence(item, context),
       ),
+    })),
+    contradictions: raw.contradictions.map((contradiction) => ({
+      title: contradiction.title,
+      description: contradiction.description,
+      evidence: contradiction.evidence.map((item) =>
+        resolveEvidence(item, context),
+      ),
+      confidence: contradiction.confidence,
     })),
     confidence: raw.confidence,
     uncertainties: raw.uncertainties,
@@ -491,7 +675,7 @@ async function requestFallbackReview(
 }
 
 export async function reviewProjectWithAI(
-  context: GithubRepositoryContext,
+  context: ProjectAiContext,
 ): Promise<AiReview> {
   const { url, model, think } = getOllamaConfig();
   const instructions = buildInstructions();
