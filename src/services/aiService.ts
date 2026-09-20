@@ -515,7 +515,8 @@ export async function reviewProjectWithAI(
 
       if (thinkingJson) {
         try {
-          return assertReview(thinkingJson);
+          const rawReview = assertRawReview(thinkingJson);
+          return decorateReviewEvidence(rawReview, context);
         } catch {
           // Continue to the fallback request.
         }
