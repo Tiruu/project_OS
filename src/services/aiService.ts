@@ -115,6 +115,7 @@ function getAiProvider(): AiProvider {
 function getGeminiConfig(): {
   apiKey: string;
   model: string;
+  fallbackModel: string;
   thinkingLevel: "minimal" | "low" | "medium" | "high";
 } {
   const apiKey = process.env.GEMINI_API_KEY?.trim();
@@ -141,6 +142,9 @@ function getGeminiConfig(): {
     model:
       process.env.GEMINI_MODEL?.trim() ||
       "gemini-3.6-flash",
+    fallbackModel:
+      process.env.GEMINI_FALLBACK_MODEL?.trim() ||
+      "gemini-3.5-flash-lite",
     thinkingLevel,
   };
 }
@@ -970,29 +974,55 @@ function getGeminiContent(
 async function requestGeminiReview(
   apiKey: string,
   model: string,
+  fallbackModel: string,
   thinkingLevel: "minimal" | "low" | "medium" | "high",
   input: string,
   instructions: string,
 ): Promise<GeminiInteractionResponse> {
-  return callGeminiWithRetry(
-    apiKey,
-    model,
-    thinkingLevel,
-    input,
-    instructions,
-  );
+  try {
+    return await callGeminiWithRetry(
+      apiKey,
+      model,
+      thinkingLevel,
+      input,
+      instructions,
+    );
+  } catch (error) {
+    const isServiceUnavailable =
+      error instanceof Error &&
+      error.message.startsWith("GEMINI_SERVICE_UNAVAILABLE:");
+
+    if (!isServiceUnavailable || fallbackModel === model) {
+      throw error;
+    }
+
+    return callGeminiWithRetry(
+      apiKey,
+      fallbackModel,
+      "minimal",
+      input,
+      [
+        instructions,
+        "",
+        "Mode de secours : utilise ce modèle uniquement pour terminer la même analyse.",
+        "Reste strictement conforme au JSON attendu.",
+      ].join("\n"),
+    );
+  }
 }
+
 
 async function reviewProjectWithGemini(
   context: ProjectAiContext,
 ): Promise<AiReview> {
-  const { apiKey, model, thinkingLevel } = getGeminiConfig();
+  const { apiKey, model, fallbackModel, thinkingLevel } = getGeminiConfig();
   const instructions = buildInstructions();
   const input = JSON.stringify(context);
 
   const response = await requestGeminiReview(
     apiKey,
     model,
+    fallbackModel,
     thinkingLevel,
     input,
     instructions,
@@ -1009,6 +1039,7 @@ async function reviewProjectWithGemini(
   const compactResponse = await requestGeminiReview(
     apiKey,
     model,
+    fallbackModel,
     thinkingLevel,
     compactInput,
     [
