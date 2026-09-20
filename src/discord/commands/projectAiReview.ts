@@ -164,27 +164,6 @@ export const projectAiReviewCommand = {
             : activity.title,
         );
 
-      console.log(
-        "[AI REVIEW CONTEXT]",
-        JSON.stringify({
-          project: context.project?.name,
-          repository: context.repository.full_name,
-          treeCount: context.repository_tree.length,
-          selectedFileCount: context.selected_files.length,
-          selectedFiles: context.selected_files.map((file) => file.path),
-          readmeChars: context.readme?.length ?? 0,
-          packageJson: context.package_json !== null,
-          recentActivityCount: context.recent_activity?.length ?? 0,
-        }),
-      );
-
-      if (context.selected_files.length === 0) {
-        throw new Error(
-          "Le contexte GitHub contient 0 fichier sélectionné. " +
-            "Impossible de lancer une analyse fiable.",
-        );
-      }
-
       const review = await reviewProjectWithAI(context);
 
       await createActivity({
