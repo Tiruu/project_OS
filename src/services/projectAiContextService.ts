@@ -136,6 +136,7 @@ function selectRecentActivities(activities: Activity[]) {
 
 export async function getProjectAiContext(
   projectId: string,
+  focusText: string | null = null,
 ): Promise<ProjectAiContext> {
   const repositories = await getGithubRepositories(projectId);
 
@@ -154,6 +155,7 @@ export async function getProjectAiContext(
       getGithubRepositoryContext(
         repository.owner,
         repository.repository,
+        focusText,
       ),
     ]);
 
