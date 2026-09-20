@@ -7,6 +7,25 @@ import {
 import { getProjects } from "../../services/projectService.js";
 import { getProjectDashboard } from "../../services/projectDashboardService.js";
 
+function formatActivityDate(occurredAt: unknown): string {
+  if (typeof occurredAt !== "string") {
+    return "";
+  }
+
+  const date = new Date(occurredAt);
+
+  if (Number.isNaN(date.getTime())) {
+    return "";
+  }
+
+  return ` — ${date.toLocaleString("fr-FR", {
+    day: "2-digit",
+    month: "2-digit",
+    hour: "2-digit",
+    minute: "2-digit",
+  })}`;
+}
+
 export const projectShowCommand = {
   data: new SlashCommandBuilder()
     .setName("project-show")
@@ -72,7 +91,10 @@ export const projectShowCommand = {
       ...(dashboard.recentActivities.length > 0
         ? dashboard.recentActivities
             .slice(0, 5)
-            .map((activity) => `• ${activity.title}`)
+            .map(
+              (activity) =>
+                `• ${activity.title}${formatActivityDate(activity.metadata.occurred_at)}`,
+            )
         : ["Aucune"]),
     ];
 
