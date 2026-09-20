@@ -14,8 +14,32 @@ const reviewSchema = {
       type: "array",
       items: { type: "string" },
     },
-    current_state: { type: "string" },
-    confidence: { type: "number" },
+    inferred_state: { type: "string" },
+    state_evidence: {
+      type: "array",
+      items: { type: "string" },
+    },
+    observed_features: {
+      type: "array",
+      items: {
+        type: "object",
+        additionalProperties: false,
+        properties: {
+          name: { type: "string" },
+          description: { type: "string" },
+          evidence: {
+            type: "array",
+            items: { type: "string" },
+          },
+        },
+        required: ["name", "description", "evidence"],
+      },
+    },
+    confidence: {
+      type: "number",
+      minimum: 0,
+      maximum: 1,
+    },
     uncertainties: {
       type: "array",
       items: { type: "string" },
@@ -29,8 +53,23 @@ const reviewSchema = {
           title: { type: "string" },
           priority: { type: "integer" },
           reason: { type: "string" },
+          evidence: {
+            type: "array",
+            items: { type: "string" },
+          },
+          confidence: {
+            type: "number",
+            minimum: 0,
+            maximum: 1,
+          },
         },
-        required: ["title", "priority", "reason"],
+        required: [
+          "title",
+          "priority",
+          "reason",
+          "evidence",
+          "confidence",
+        ],
       },
     },
   },
@@ -39,7 +78,9 @@ const reviewSchema = {
     "purpose",
     "type",
     "technologies",
-    "current_state",
+    "inferred_state",
+    "state_evidence",
+    "observed_features",
     "confidence",
     "uncertainties",
     "suggested_tasks",
@@ -72,24 +113,41 @@ export async function reviewProjectWithAI(
 ): Promise<AiReview> {
   const { url, model } = getOllamaConfig();
 
-  const instructions = `
-Tu es l'analyste de Project OS.
-
-Ta mission est d'analyser un dépôt GitHub à partir des éléments fournis et de produire une fiche de projet utile à un développeur solo.
-
-Règles :
-- Ne prétends pas connaître ce qui n'est pas visible dans les données.
-- Si l'état réel du projet est incertain, indique-le clairement.
-- Le champ current_state doit rester factuel et prudent.
-- Le champ type doit décrire la nature du projet.
-- technologies doit contenir uniquement des technologies raisonnablement déduites des données.
-- purpose explique pourquoi le projet semble exister, pas seulement ce qu'il contient.
-- suggested_tasks doit proposer au maximum 5 tâches concrètes, directement déduites de l'état observé.
-- Ne crée aucune tâche automatiquement : tu fais des propositions.
-- confidence est un nombre entre 0 et 1.
-- uncertainties contient les points que Project OS devrait vérifier.
-- Réponds strictement selon le JSON schema fourni.
-`;
+  const instructions = [
+    "Tu es l'analyste technique de Project OS.",
+    "",
+    "Ta mission est de comprendre un dépôt GitHub pour un développeur solo, puis de produire une analyse fondée sur des preuves présentes dans les données fournies.",
+    "",
+    "Hiérarchie de confiance des sources :",
+    "1. contenu réel des fichiers sélectionnés",
+    "2. README et documentation",
+    "3. structure du dépôt",
+    "4. package/configuration",
+    "5. historique GitHub",
+    "6. métadonnées du dépôt",
+    "7. données déjà stockées dans Project OS",
+    "",
+    "Règles impératives :",
+    "- N'affirme jamais qu'une fonctionnalité existe uniquement parce que son nom est suggéré par un dossier, un commit ou une description.",
+    "- Chaque fonctionnalité observée doit citer au moins un fichier présent dans selected_files ou repository_tree.",
+    "- Ne confonds jamais l'état administratif de Project OS avec l'état réel du projet.",
+    "- inferred_state est ton estimation de l'état réel du projet. Le current_state fourni par Project OS est seulement un indice historique.",
+    "- state_evidence doit citer les éléments qui justifient inferred_state.",
+    "- technologies doit contenir uniquement les technologies réellement observables ou très solidement déduites.",
+    "- purpose décrit le but probable du projet à partir des preuves disponibles.",
+    "- observed_features doit lister 2 à 8 fonctionnalités ou sous-systèmes réellement observables quand c'est possible.",
+    "- suggested_tasks doit contenir au maximum 5 tâches concrètes et spécifiques au dépôt.",
+    "- Une tâche doit être directement justifiée par les preuves disponibles.",
+    "- Interdis les recommandations vagues du type 'ajouter des tests', 'améliorer les performances' ou 'mettre à jour les dépendances' sans preuve spécifique.",
+    "- Chaque tâche doit citer au moins une preuve.",
+    "- confidence est entre 0 et 1.",
+    "- uncertainties doit signaler ce qui reste réellement inconnu.",
+    "- Ne crée aucune tâche automatiquement : tu proposes seulement.",
+    "- Réponds strictement selon le JSON schema fourni.",
+    "",
+    "Contrainte importante :",
+    "Le fait qu'un dépôt soit privé ne signifie pas que les données sont inaccessibles. Analyse uniquement les données effectivement fournies par Project OS.",
+  ].join("\n");
 
   const input = JSON.stringify(context);
 
@@ -113,7 +171,9 @@ Règles :
           },
           {
             role: "user",
-            content: `Analyse ce dépôt GitHub pour Project OS :\n\n${input}`,
+            content:
+              "Analyse ce dépôt GitHub pour Project OS :\n\n" +
+              input,
           },
         ],
         options: {
@@ -121,9 +181,13 @@ Règles :
         },
       }),
     });
-  } catch (error) {
+  } catch {
     throw new Error(
-      `Impossible de joindre Ollama sur ${url}. Vérifie qu'Ollama est lancé et que le modèle "${model}" est installé.`,
+      "Impossible de joindre Ollama sur " +
+        url +
+        '. Vérifie qu'Ollama est lancé et que le modèle "' +
+        model +
+        '" est installé.',
     );
   }
 
@@ -131,7 +195,10 @@ Règles :
     const body = await response.text();
 
     throw new Error(
-      `Ollama API ${response.status} : ${body.slice(0, 500)}`,
+      "Ollama API " +
+        response.status +
+        " : " +
+        body.slice(0, 500),
     );
   }
 
@@ -147,10 +214,20 @@ Règles :
   }
 
   try {
-    return JSON.parse(outputText) as AiReview;
+    const parsed = JSON.parse(outputText) as AiReview;
+
+    if (
+      typeof parsed.confidence !== "number" ||
+      parsed.confidence < 0 ||
+      parsed.confidence > 1
+    ) {
+      throw new Error("confidence invalide");
+    }
+
+    return parsed;
   } catch {
     throw new Error(
-      "Ollama a répondu avec un JSON invalide.",
+      "Ollama a répondu avec un JSON invalide ou incohérent.",
     );
   }
 }
