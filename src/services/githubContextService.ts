@@ -182,6 +182,13 @@ async function getOptionalGithubFile<T>(
   }
 }
 
+function encodeGithubPath(path: string): string {
+  return path
+    .split("/")
+    .map((segment) => encodeURIComponent(segment))
+    .join("/");
+}
+
 function isIgnoredPath(path: string): boolean {
   return path
     .split("/")
@@ -416,7 +423,7 @@ export async function getGithubRepositoryContext(
       ? getOptionalGithubFile<GithubContentFile>(
           repositoryUrl +
             "/contents/" +
-            encodeURIComponent(readmeEntry.path) +
+            encodeGithubPath(readmeEntry.path) +
             "?ref=" +
             encodeURIComponent(remote.default_branch),
         )
@@ -425,7 +432,7 @@ export async function getGithubRepositoryContext(
       ? getOptionalGithubFile<GithubContentFile>(
           repositoryUrl +
             "/contents/" +
-            encodeURIComponent(packageJsonEntry.path) +
+            encodeGithubPath(packageJsonEntry.path) +
             "?ref=" +
             encodeURIComponent(remote.default_branch),
         )
@@ -484,7 +491,7 @@ export async function getGithubRepositoryContext(
     const file = await getOptionalGithubFile<GithubContentFile>(
       repositoryUrl +
         "/contents/" +
-        encodeURIComponent(selected.path) +
+        encodeGithubPath(selected.path) +
         "?ref=" +
         encodeURIComponent(remote.default_branch),
     );
@@ -531,7 +538,7 @@ export async function getGithubRepositoryContext(
     const file = await getOptionalGithubFile<GithubContentFile>(
       repositoryUrl +
         "/contents/" +
-        encodeURIComponent(path) +
+        encodeGithubPath(path) +
         "?ref=" +
         encodeURIComponent(remote.default_branch),
     );
