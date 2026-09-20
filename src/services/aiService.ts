@@ -109,8 +109,13 @@ function buildInstructions(): string {
     "- Ne considère jamais un nom de fichier, un dossier ou un commit comme preuve suffisante qu'une fonctionnalité existe.",
     "- Chaque fonctionnalité observée doit citer un fichier concret.",
     "- inferred_state décrit l'état réel estimé du projet, pas l'état administratif 'Importé depuis GitHub'.",
+    "- La présence de dist/, build/, bin/ ou d'autres artefacts compilés ne prouve jamais que le projet est en production ou déployé.",
+    "- N'utilise 'production', 'déployé' ou équivalent que si des preuves spécifiques de déploiement sont présentes.",
     "- technologies contient uniquement les technologies observables ou très solidement déduites.",
     "- observed_features contient 2 à 8 sous-systèmes réellement observés quand c'est possible.",
+    "- purpose décrit le but du projet analysé, jamais le but de cette analyse.",
+    "- type décrit la nature du projet analysé (par exemple game, bot, library), jamais 'analysis' ou le type de la réponse.",
+    "- Si Project OS fournit déjà project.purpose et project.type, réutilise ces valeurs pour purpose et type ; ne les remplace pas par une description de ton travail d'analyse.",
     "",
     "Règles de contradictions :",
     "- Détecte uniquement des contradictions substantielles entre les données Project OS et le code/documentation.",
@@ -323,10 +328,11 @@ function resolveEvidence(
 ): AiEvidence {
   const normalized = normalizeEvidenceText(evidence);
   const projectOs = context.project_os;
+  const references = projectOs.reference_index;
 
   const taskMarker = evidence.match(/^TASK:([a-z0-9-]+)/i);
   if (taskMarker) {
-    const task = projectOs.tasks.find(
+    const task = references.tasks.find(
       (item) => item.id.toLowerCase() === taskMarker[1].toLowerCase(),
     );
     if (task) {
@@ -348,7 +354,7 @@ function resolveEvidence(
 
   const decisionMarker = evidence.match(/^DECISION:([a-z0-9-]+)/i);
   if (decisionMarker) {
-    const decision = projectOs.decisions.find(
+    const decision = references.decisions.find(
       (item) => item.id.toLowerCase() === decisionMarker[1].toLowerCase(),
     );
     if (decision) {
@@ -370,7 +376,7 @@ function resolveEvidence(
 
   const activityMarker = evidence.match(/^ACTIVITY:([a-z0-9-]+)/i);
   if (activityMarker) {
-    const activity = projectOs.recent_activities.find(
+    const activity = references.activities.find(
       (item) => item.id.toLowerCase() === activityMarker[1].toLowerCase(),
     );
     if (activity) {
@@ -404,7 +410,7 @@ function resolveEvidence(
   }
 
   const projectOsMatches = [
-    ...projectOs.tasks.map((item) => ({
+    ...references.tasks.map((item) => ({
       label: item.title,
       source:
         "Project OS — tâche : " +
@@ -413,7 +419,7 @@ function resolveEvidence(
         item.status +
         "]",
     })),
-    ...projectOs.decisions.map((item) => ({
+    ...references.decisions.map((item) => ({
       label: item.title,
       source:
         "Project OS — décision : " +
@@ -422,7 +428,7 @@ function resolveEvidence(
         item.status +
         "]",
     })),
-    ...projectOs.recent_activities.map((item) => ({
+    ...references.activities.map((item) => ({
       label: item.title,
       source:
         "Project OS — activité : " +
@@ -540,10 +546,13 @@ function decorateReviewEvidence(
   raw: RawAiReview,
   context: ProjectAiContext,
 ): AiReview {
+  const projectPurpose = context.project_os.project.purpose?.trim();
+  const projectType = context.project_os.project.type?.trim();
+
   return {
     summary: raw.summary,
-    purpose: raw.purpose,
-    type: raw.type,
+    purpose: projectPurpose || raw.purpose,
+    type: projectType || raw.type,
     technologies: raw.technologies,
     inferred_state: raw.inferred_state,
     state_evidence: raw.state_evidence.map((item) =>
@@ -693,6 +702,7 @@ function buildCompactAiInput(context: ProjectAiContext): string {
       tasks: context.project_os.tasks.slice(0, 10),
       decisions: context.project_os.decisions.slice(0, 8),
       recent_activities: context.project_os.recent_activities.slice(0, 12),
+      reference_index: context.project_os.reference_index,
     },
   });
 }
