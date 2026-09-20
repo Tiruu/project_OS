@@ -33,6 +33,12 @@ export type ProjectAiContext = GithubRepositoryContext & {
       created_at: string;
       completed_at: string | null;
     }>;
+    active_tasks: Array<{
+      id: string;
+      title: string;
+      status: Exclude<Task["status"], "DONE">;
+      priority: number;
+    }>;
     decisions: Array<{
       id: string;
       title: string;
@@ -41,6 +47,12 @@ export type ProjectAiContext = GithubRepositoryContext & {
       consequences: string | null;
       status: Decision["status"];
       created_at: string;
+    }>;
+    active_decisions: Array<{
+      id: string;
+      title: string;
+      decision: string;
+      status: Decision["status"];
     }>;
     recent_activities: Array<{
       id: string;
@@ -113,9 +125,17 @@ function selectDecisions(decisions: Decision[]) {
     .slice(0, 15);
 }
 
+const HISTORICAL_AI_ACTIVITY_TYPES = new Set<Activity["type"]>([
+  "AI_REVIEW",
+  "AI_TASK_CREATED",
+  "AI_TASK_IGNORED",
+]);
+
 function selectRecentActivities(activities: Activity[]) {
   return [...activities]
-    .filter((activity) => activity.type !== "AI_REVIEW")
+    .filter(
+      (activity) => !HISTORICAL_AI_ACTIVITY_TYPES.has(activity.type),
+    )
     .sort(
       (a, b) => getActivityTimestamp(b) - getActivityTimestamp(a),
     )
@@ -172,7 +192,33 @@ export async function getProjectAiContext(
         current_state: project.current_state,
       },
       tasks: selectTasks(tasks),
+      active_tasks: tasks
+        .filter((task) => task.status !== "DONE")
+        .sort((a, b) => {
+          if (a.priority !== b.priority) return a.priority - b.priority;
+          return Date.parse(a.created_at) - Date.parse(b.created_at);
+        })
+        .slice(0, 20)
+        .map((task) => ({
+          id: task.id,
+          title: task.title,
+          status: task.status as Exclude<Task["status"], "DONE">,
+          priority: task.priority,
+        })),
       decisions: selectDecisions(decisions),
+      active_decisions: decisions
+        .filter((decision) => decision.status === "ACTIVE")
+        .sort(
+          (a, b) =>
+            Date.parse(b.created_at) - Date.parse(a.created_at),
+        )
+        .slice(0, 20)
+        .map((decision) => ({
+          id: decision.id,
+          title: decision.title,
+          decision: decision.decision,
+          status: decision.status,
+        })),
       recent_activities: selectRecentActivities(activities),
       reference_index: {
         tasks: tasks.map((task) => ({
