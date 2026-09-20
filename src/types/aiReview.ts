@@ -1,7 +1,15 @@
+export type AiObservedFeature = {
+  name: string;
+  description: string;
+  evidence: string[];
+};
+
 export type AiSuggestedTask = {
   title: string;
   priority: number;
   reason: string;
+  evidence: string[];
+  confidence: number;
 };
 
 export type AiReview = {
@@ -9,7 +17,9 @@ export type AiReview = {
   purpose: string;
   type: string;
   technologies: string[];
-  current_state: string;
+  inferred_state: string;
+  state_evidence: string[];
+  observed_features: AiObservedFeature[];
   confidence: number;
   uncertainties: string[];
   suggested_tasks: AiSuggestedTask[];
