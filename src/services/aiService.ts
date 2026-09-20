@@ -920,6 +920,7 @@ async function callGemini(
         generation_config: {
           thinking_level: thinkingLevel,
         },
+        store: false,
       }),
     });
   } catch {
@@ -939,8 +940,22 @@ async function callGemini(
 }
 
 function getGeminiContent(
-  response: GeminiInteractionResponse,
+  response: GeminiInteractionResponse & {
+    outputs?: Array<{
+      type?: string;
+      text?: string;
+    }>;
+  },
 ): string {
+  const outputs = response.outputs
+    ?.filter((output) => output.type === "text" && output.text)
+    .map((output) => output.text!.trim())
+    .filter(Boolean);
+
+  if (outputs?.length) {
+    return outputs.join("\n").trim();
+  }
+
   return (
     response.steps
       ?.flatMap((step) =>
