@@ -112,6 +112,14 @@ export async function startDiscord(): Promise<void> {
           return;
         }
 
+        if (interaction.commandName === "project-ai-review") {
+          const { projectAiReviewCommand } =
+            await import("../discord/commands/projectAiReview.js");
+
+          await projectAiReviewCommand.autocomplete(interaction);
+          return;
+        }
+
         await interaction.respond([]);
       } catch (error) {
         console.error(
@@ -267,6 +275,14 @@ export async function startDiscord(): Promise<void> {
           await import("../discord/commands/projectDiscover.js");
 
         await projectDiscoverCommand.execute(interaction);
+        return;
+      }
+
+      if (interaction.commandName === "project-ai-review") {
+        const { projectAiReviewCommand } =
+          await import("../discord/commands/projectAiReview.js");
+
+        await projectAiReviewCommand.execute(interaction);
         return;
       }
     } catch (error) {
