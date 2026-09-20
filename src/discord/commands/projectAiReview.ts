@@ -164,16 +164,16 @@ function getSuggestedTasks(activity: Activity): AiSuggestedTask[] {
   );
 }
 
-function hasAiTaskAction(
+function getExistingAiTaskAction(
   activities: Activity[],
   reviewActivityId: string,
   index: number,
-  type: "AI_TASK_CREATED" | "AI_TASK_IGNORED",
 ): Activity | null {
   return (
     activities.find(
       (activity) =>
-        activity.type === type &&
+        (activity.type === "AI_TASK_CREATED" ||
+          activity.type === "AI_TASK_IGNORED") &&
         activity.metadata.ai_review_activity_id === reviewActivityId &&
         Number(activity.metadata.suggested_task_index) === index,
     ) ?? null
@@ -221,20 +221,17 @@ export async function handleAiTaskAction(
   }
 
   const activities = await getActivities(reviewActivity.project_id);
-  const existingAction = hasAiTaskAction(
+  const existingAction = getExistingAiTaskAction(
     activities,
     reviewActivity.id,
     index,
-    action === "create"
-      ? "AI_TASK_CREATED"
-      : "AI_TASK_IGNORED",
   );
 
   if (existingAction) {
     await interaction.reply({
       content:
-        action === "create"
-          ? "Cette tâche a déjà été créée depuis cette analyse."
+        existingAction.type === "AI_TASK_CREATED"
+          ? "Cette proposition a déjà été transformée en tâche."
           : "Cette proposition a déjà été ignorée.",
       ephemeral: true,
     });
@@ -254,6 +251,8 @@ export async function handleAiTaskAction(
         task_kind: task.task_kind,
         confidence: task.confidence,
         evidence: task.evidence,
+        discord_user_id: interaction.user.id,
+        discord_username: interaction.user.username,
       },
     });
 
@@ -288,6 +287,8 @@ export async function handleAiTaskAction(
       task_kind: task.task_kind,
       confidence: task.confidence,
       evidence: task.evidence,
+      discord_user_id: interaction.user.id,
+      discord_username: interaction.user.username,
     },
   });
 
