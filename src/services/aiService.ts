@@ -77,11 +77,11 @@ function buildInstructions(): string {
     "- N'affirme jamais avoir lu le contenu d'un fichier uniquement parce qu'un autre fichier le référence.",
     "- Une conclusion de qualité comme 'manque de modularité', 'manque de tests' ou 'architecture insuffisante' doit rester une incertitude sauf si le code fourni contient des éléments concrets qui la démontrent.",
     "",
-    "Règles d'analyse :"
+    "Règles d'analyse :",
     "- Ne considère jamais un nom de fichier, un dossier ou un commit comme preuve suffisante qu'une fonctionnalité existe.",
     "- Chaque fonctionnalité observée doit citer un fichier concret.",
     "- inferred_state décrit l'état réel estimé du projet, pas l'état administratif 'Importé depuis GitHub'.",
-    "- Ne transforme pas l'absence de tests, de modularité ou d'une fonctionnalité en défaut sans preuve concrète."
+    "- Ne transforme pas l'absence de tests, de modularité ou d'une fonctionnalité en défaut sans preuve concrète.",
     "- technologies contient uniquement les technologies observables ou très solidement déduites.",
     "- observed_features contient 2 à 8 sous-systèmes réellement observés quand c'est possible.",
     "",
