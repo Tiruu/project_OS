@@ -18,6 +18,9 @@ export async function getProjectDashboard(
   return {
     project,
     tasks,
+    todoTasks: tasks.filter((task) => task.status === "TODO"),
+    inProgressTasks: tasks.filter((task) => task.status === "IN_PROGRESS"),
+    doneTasks: tasks.filter((task) => task.status === "DONE"),
     recentActivities: activities.slice(0, 10),
     activeDecisions: decisions.filter(
       (decision) => decision.status === "ACTIVE",

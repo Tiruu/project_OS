@@ -9,11 +9,13 @@ export const discordClient = new Client({
 });
 export async function startDiscord() {
     discordClient.on("interactionCreate", async (interaction) => {
-        // ─────────────────────────────
-        // AUTOCOMPLÉTION
-        // ─────────────────────────────
         if (interaction.isAutocomplete()) {
             try {
+                if (interaction.commandName === "project-show") {
+                    const { projectShowCommand } = await import("../discord/commands/projectShow.js");
+                    await projectShowCommand.autocomplete(interaction);
+                    return;
+                }
                 if (interaction.commandName === "project-task") {
                     const { projectTaskCommand } = await import("../discord/commands/projectTask.js");
                     await projectTaskCommand.autocomplete(interaction);
@@ -32,9 +34,6 @@ export async function startDiscord() {
             }
             return;
         }
-        // ─────────────────────────────
-        // COMMANDES SLASH
-        // ─────────────────────────────
         if (!interaction.isChatInputCommand()) {
             return;
         }

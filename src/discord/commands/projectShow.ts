@@ -1,51 +1,84 @@
-import { ChatInputCommandInteraction, SlashCommandBuilder } from "discord.js";
+import {
+  AutocompleteInteraction,
+  ChatInputCommandInteraction,
+  SlashCommandBuilder,
+} from "discord.js";
 
+import { getProjects } from "../../services/projectService.js";
 import { getProjectDashboard } from "../../services/projectDashboardService.js";
-
-const projectId = "62032ca3-4d5a-47fc-9303-985f122e5629";
 
 export const projectShowCommand = {
   data: new SlashCommandBuilder()
     .setName("project-show")
-    .setDescription("Affiche le dashboard d'un projet"),
+    .setDescription("Affiche le dashboard d'un projet")
+    .addStringOption((option) =>
+      option
+        .setName("projet")
+        .setDescription("Projet à afficher")
+        .setRequired(true)
+        .setAutocomplete(true),
+    ),
 
   async execute(interaction: ChatInputCommandInteraction): Promise<void> {
+    const projectId = interaction.options.getString("projet", true);
+
     const dashboard = await getProjectDashboard(projectId);
 
-    const todo = dashboard.tasks.filter(
-      (task) => task.status === "TODO",
-    ).length;
-
-    const inProgress = dashboard.tasks.filter(
-      (task) => task.status === "IN_PROGRESS",
-    ).length;
-
-    const done = dashboard.tasks.filter(
-      (task) => task.status === "DONE",
-    ).length;
-
     const lines = [
-      `## ${dashboard.project.name}`,
+      `# ${dashboard.project.name}`,
       "",
       `**État**`,
       dashboard.project.current_state ?? "Non défini",
       "",
       `**Tâches**`,
-      `DONE : ${done}`,
-      `IN PROGRESS : ${inProgress}`,
-      `TODO : ${todo}`,
+      `Terminées : ${dashboard.doneTasks.length}`,
+      `En cours : ${dashboard.inProgressTasks.length}`,
+      `À faire : ${dashboard.todoTasks.length}`,
+      "",
+      `**Prochaines tâches**`,
+      ...(dashboard.todoTasks.length > 0
+        ? dashboard.todoTasks
+            .slice(0, 5)
+            .map((task) => `• ${task.title} — priorité ${task.priority}`)
+        : ["Aucune"]),
       "",
       `**Décisions actives**`,
       ...(dashboard.activeDecisions.length > 0
-        ? dashboard.activeDecisions.map((decision) => `• ${decision.title}`)
+        ? dashboard.activeDecisions
+            .slice(0, 5)
+            .map((decision) => `• ${decision.title}`)
         : ["Aucune"]),
       "",
       `**Activité récente**`,
-      ...dashboard.recentActivities
-        .slice(0, 5)
-        .map((activity) => `• ${activity.title}`),
+      ...(dashboard.recentActivities.length > 0
+        ? dashboard.recentActivities
+            .slice(0, 5)
+            .map((activity) => `• ${activity.title}`)
+        : ["Aucune"]),
     ];
 
     await interaction.reply(lines.join("\n"));
+  },
+
+  async autocomplete(interaction: AutocompleteInteraction): Promise<void> {
+    try {
+      const focusedValue = interaction.options.getFocused().toLowerCase();
+
+      const projects = await getProjects();
+
+      const choices = projects
+        .filter((project) => project.name.toLowerCase().includes(focusedValue))
+        .slice(0, 25)
+        .map((project) => ({
+          name: project.name,
+          value: project.id,
+        }));
+
+      await interaction.respond(choices);
+    } catch (error) {
+      console.error("Erreur autocomplete project-show :", error);
+
+      await interaction.respond([]);
+    }
   },
 };
