@@ -134,6 +134,31 @@ export async function startDiscord(): Promise<void> {
     }
 
     if (interaction.isButton()) {
+      if (interaction.customId.startsWith("ai-task:")) {
+        try {
+          const { handleAiTaskAction } =
+            await import("../discord/commands/projectAiReview.js");
+
+          await handleAiTaskAction(interaction);
+        } catch (error) {
+          console.error("Erreur bouton tâche IA :", error);
+
+          if (interaction.replied || interaction.deferred) {
+            await interaction.followUp({
+              content: "Une erreur est survenue pendant le traitement de la tâche IA.",
+              ephemeral: true,
+            });
+          } else {
+            await interaction.reply({
+              content: "Une erreur est survenue pendant le traitement de la tâche IA.",
+              ephemeral: true,
+            });
+          }
+        }
+
+        return;
+      }
+
       if (interaction.customId.startsWith("github-import:")) {
         try {
           const { projectDiscoverCommand } =
