@@ -96,6 +96,14 @@ export async function startDiscord(): Promise<void> {
           return;
         }
 
+        if (interaction.commandName === "project-import-github") {
+          const { projectImportGithubCommand } =
+            await import("../discord/commands/projectImportGithub.js");
+
+          await projectImportGithubCommand.autocomplete(interaction);
+          return;
+        }
+
         await interaction.respond([]);
       } catch (error) {
         console.error(
@@ -201,6 +209,14 @@ export async function startDiscord(): Promise<void> {
           await import("../discord/commands/projectGithubSync.js");
 
         await projectGithubSyncCommand.execute(interaction);
+        return;
+      }
+
+      if (interaction.commandName === "project-import-github") {
+        const { projectImportGithubCommand } =
+          await import("../discord/commands/projectImportGithub.js");
+
+        await projectImportGithubCommand.execute(interaction);
         return;
       }
     } catch (error) {
