@@ -182,6 +182,27 @@ async function getOptionalGithubFile<T>(
   }
 }
 
+async function getRequiredGithubFile<T>(
+  url: string,
+  label: string,
+): Promise<T> {
+  try {
+    return await githubFetch<T>(url);
+  } catch (error) {
+    const message =
+      error instanceof Error
+        ? error.message
+        : "Erreur inconnue";
+
+    throw new Error(
+      "Impossible de lire " +
+        label +
+        " depuis GitHub. " +
+        message +
+    );
+  }
+}
+
 function encodeGithubPath(path: string): string {
   return path
     .split("/")
@@ -437,11 +458,12 @@ export async function getGithubRepositoryContext(
             encodeURIComponent(remote.default_branch),
         )
       : Promise.resolve(null),
-    getOptionalGithubFile<GithubTreeResponse>(
+    getRequiredGithubFile<GithubTreeResponse>(
       repositoryUrl +
         "/git/trees/" +
         encodeURIComponent(remote.default_branch) +
         "?recursive=1",
+      "l'arbre GitHub du dépôt",
     ),
   ]);
 
@@ -488,17 +510,14 @@ export async function getGithubRepositoryContext(
       break;
     }
 
-    const file = await getOptionalGithubFile<GithubContentFile>(
+    const file = await getRequiredGithubFile<GithubContentFile>(
       repositoryUrl +
         "/contents/" +
         encodeGithubPath(selected.path) +
         "?ref=" +
         encodeURIComponent(remote.default_branch),
+      "le fichier " + selected.path,
     );
-
-    if (!file) {
-      continue;
-    }
 
     const content = decodeGithubContent(file).slice(
       0,
@@ -535,17 +554,14 @@ export async function getGithubRepositoryContext(
       break;
     }
 
-    const file = await getOptionalGithubFile<GithubContentFile>(
+    const file = await getRequiredGithubFile<GithubContentFile>(
       repositoryUrl +
         "/contents/" +
         encodeGithubPath(path) +
         "?ref=" +
         encodeURIComponent(remote.default_branch),
+      "le fichier référencé " + path,
     );
-
-    if (!file) {
-      continue;
-    }
 
     const content = decodeGithubContent(file).slice(
       0,
