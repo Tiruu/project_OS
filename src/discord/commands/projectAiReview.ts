@@ -155,7 +155,7 @@ export const projectAiReviewCommand = {
         "**Résumé**",
         review.summary,
         "",
-        "**But probable**",
+        "**But du projet**",
         review.purpose,
         "",
         "**Type**",
@@ -169,7 +169,7 @@ export const projectAiReviewCommand = {
         ...(review.state_evidence.length > 0
           ? [
               "",
-              "**Preuves de l'état**",
+              "**Indications de l'état**",
               ...review.state_evidence
                 .slice(0, 5)
                 .map(
