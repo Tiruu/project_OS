@@ -3,6 +3,7 @@ export type ActivityType =
   | "TASK_CREATED"
   | "TASK_STARTED"
   | "TASK_COMPLETED"
+  | "TASK_DELETED"
   | "STATUS_CHANGED"
   | "NOTE_ADDED"
   | "DECISION_CREATED"
