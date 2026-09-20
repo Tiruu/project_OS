@@ -16,6 +16,7 @@ import { projectGithubSyncCommand } from "./commands/projectGithubSync.js";
 import { projectImportGithubCommand } from "./commands/projectImportGithub.js";
 import { projectDeleteCommand } from "./commands/projectDelete.js";
 import { projectDiscoverCommand } from "./commands/projectDiscover.js";
+import { projectAiReviewCommand } from "./commands/projectAiReview.js";
 
 const token = process.env.DISCORD_TOKEN;
 const clientId = process.env.DISCORD_CLIENT_ID;
@@ -51,6 +52,7 @@ await rest.put(Routes.applicationGuildCommands(clientId, guildId), {
     projectImportGithubCommand.data.toJSON(),
     projectDeleteCommand.data.toJSON(),
     projectDiscoverCommand.data.toJSON(),
+    projectAiReviewCommand.data.toJSON(),
   ],
 });
 
