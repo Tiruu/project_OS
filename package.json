@@ -1,0 +1,22 @@
+{
+  "name": "project_os",
+  "version": "1.0.0",
+  "description": "",
+  "main": "index.js",
+  "scripts": {
+    "test": "echo \"Error: no test specified\" && exit 1"
+  },
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/Tiruu/project_OS.git"
+  },
+  "keywords": [],
+  "type": "commonjs",
+  "bugs": {
+    "url": "https://github.com/Tiruu/project_OS/issues"
+  },
+  "homepage": "https://github.com/Tiruu/project_OS#readme",
+  "devDependencies": {
+    "supabase": "^2.117.0"
+  }
+}
