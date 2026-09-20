@@ -104,6 +104,14 @@ export async function startDiscord(): Promise<void> {
           return;
         }
 
+        if (interaction.commandName === "project-delete") {
+          const { projectDeleteCommand } =
+            await import("../discord/commands/projectDelete.js");
+
+          await projectDeleteCommand.autocomplete(interaction);
+          return;
+        }
+
         await interaction.respond([]);
       } catch (error) {
         console.error(
@@ -217,6 +225,14 @@ export async function startDiscord(): Promise<void> {
           await import("../discord/commands/projectImportGithub.js");
 
         await projectImportGithubCommand.execute(interaction);
+        return;
+      }
+
+      if (interaction.commandName === "project-delete") {
+        const { projectDeleteCommand } =
+          await import("../discord/commands/projectDelete.js");
+
+        await projectDeleteCommand.execute(interaction);
         return;
       }
     } catch (error) {
