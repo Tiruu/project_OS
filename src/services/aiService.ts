@@ -182,7 +182,7 @@ function assertRawReview(value: unknown): RawAiReview {
     throw new Error("La réponse IA n'est pas un objet JSON.");
   }
 
-  const review = value as Partial<AiReview>;
+  const review = value as Partial<RawAiReview>;
 
   if (
     typeof review.summary !== "string" ||
