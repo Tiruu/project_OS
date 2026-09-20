@@ -10,7 +10,8 @@ export type ActivityType =
   | "PR_UPDATED"
   | "PR_MERGED"
   | "COMMIT"
-  | "RELEASE";
+  | "RELEASE"
+  | "AI_REVIEW";
 
 export type Activity = {
   id: string;
