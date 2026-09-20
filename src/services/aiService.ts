@@ -111,6 +111,10 @@ function buildInstructions(): string {
     "- inferred_state décrit l'état réel estimé du projet, pas l'état administratif 'Importé depuis GitHub'.",
     "- La présence de dist/, build/, bin/ ou d'autres artefacts compilés ne prouve jamais que le projet est en production ou déployé.",
     "- N'utilise 'production', 'déployé' ou équivalent que si des preuves spécifiques de déploiement sont présentes.",
+    "- La présence ou l'absence d'un artefact dans le contexte fourni ne prouve jamais à elle seule son existence ou son absence dans le projet réel.",
+    "- Remplace les affirmations d'absence par des formulations limitées au contexte, par exemple 'non observé dans les fichiers fournis'.",
+    "- N'emploie jamais 'complet', 'manquant', 'aucun', 'absent' ou équivalent pour conclure sur le projet entier lorsque seule une sélection de fichiers ou l'arborescence a été fournie.",
+
     "- technologies contient uniquement les technologies observables ou très solidement déduites.",
     "- observed_features contient 2 à 8 sous-systèmes réellement observés quand c'est possible.",
     "- purpose décrit le but du projet analysé, jamais le but de cette analyse.",
