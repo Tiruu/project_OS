@@ -1504,12 +1504,18 @@ export async function askProjectWithAI(
 
   const instructions = [
     "Tu es l'assistant de contexte de Project OS.",
-    "Réponds en français, directement à la question.",
+    "Réponds en français, directement et de façon exploitable à la question.",
     "Utilise uniquement les éléments présents dans le contexte fourni.",
     "Distingue les faits observés des déductions.",
     "Ne prétends pas avoir exécuté le projet si le contexte ne le démontre pas.",
-    "Quand une information manque, dis précisément qu'elle n'est pas déterminable à partir du contexte fourni.",
+    "Quand une information manque, dis précisément ce qui n'est pas déterminable à partir du contexte fourni.",
     "Donne des références de fichiers quand elles sont disponibles.",
+    "",
+    "Pour une question du type 'quelle pourrait être la prochaine tâche', examine d'abord les tâches TODO/IN_PROGRESS, les décisions actives, l'état du projet, les activités récentes et le code sélectionné.",
+    "Propose au maximum UNE tâche principale concrète qui fait avancer le projet maintenant.",
+    "N'invente pas une tâche déjà présente dans Project OS et ne propose pas une amélioration générique sans problème ou besoin observable.",
+    "Structure ce cas en : Tâche, Pourquoi maintenant, Preuves, Résultat attendu.",
+    "Si aucune tâche ne peut être justifiée avec les preuves disponibles, explique pourquoi au lieu d'inventer.",
   ].join("\n");
 
   const provider = getAiProvider();
@@ -1524,23 +1530,66 @@ export async function askProjectWithAI(
         input,
         instructions,
       );
-      return getGeminiContent(response) || "Aucune réponse exploitable.";
+      const content = getGeminiContent(response);
+      if (content) {
+        return content;
+      }
+
+      throw new Error(
+        "Gemini a répondu sans contenu texte exploitable.",
+      );
     } catch (error) {
       if (error instanceof Error && error.message.startsWith("GEMINI_RATE_LIMIT")) {
+        const fallback = getOllamaConfig();
         const response = await callOllama(
-          getOllamaConfig().url,
+          fallback.url,
           {
-            model: getOllamaConfig().model,
+            model: fallback.model,
             stream: false,
-            think: getOllamaConfig().think,
+            think: false,
             messages: [
               { role: "system", content: instructions },
               { role: "user", content: input },
             ],
           },
         );
-        return response.message?.content?.trim() || "Aucune réponse exploitable.";
+        const content = response.message?.content?.trim() ?? "";
+        if (content) {
+          return content;
+        }
+
+        throw new Error(
+          "Le modèle de secours Ollama n'a renvoyé aucun contenu texte.",
+        );
       }
+
+      if (
+        error instanceof Error &&
+        error.message.includes("sans contenu texte exploitable")
+      ) {
+        const fallback = getOllamaConfig();
+        const response = await callOllama(
+          fallback.url,
+          {
+            model: fallback.model,
+            stream: false,
+            think: false,
+            messages: [
+              { role: "system", content: instructions },
+              { role: "user", content: input },
+            ],
+          },
+        );
+        const content = response.message?.content?.trim() ?? "";
+        if (content) {
+          return content;
+        }
+
+        throw new Error(
+          "Gemini n'a renvoyé aucun texte et le modèle de secours Ollama n'en a pas renvoyé non plus.",
+        );
+      }
+
       throw error;
     }
   }
@@ -1549,13 +1598,22 @@ export async function askProjectWithAI(
   const response = await callOllama(config.url, {
     model: config.model,
     stream: false,
-    think: config.think,
+    // /project-ask is a normal answer, not a reasoning stream.
+    // Keep thinking disabled so the answer is returned in message.content.
+    think: false,
     messages: [
       { role: "system", content: instructions },
       { role: "user", content: input },
     ],
   });
-  return response.message?.content?.trim() || "Aucune réponse exploitable.";
+  const content = response.message?.content?.trim() ?? "";
+  if (content) {
+    return content;
+  }
+
+  throw new Error(
+    "Ollama n'a renvoyé aucun contenu texte pour /project-ask.",
+  );
 }
 
 export async function reviewProjectWithAI(
