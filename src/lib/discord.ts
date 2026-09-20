@@ -112,6 +112,14 @@ export async function startDiscord(): Promise<void> {
           return;
         }
 
+        if (interaction.commandName === "project-task-delete") {
+          const { projectTaskDeleteCommand } =
+            await import("../discord/commands/projectTaskDelete.js");
+
+          await projectTaskDeleteCommand.autocomplete(interaction);
+          return;
+        }
+
         if (interaction.commandName === "project-ai-review") {
           const { projectAiReviewCommand } =
             await import("../discord/commands/projectAiReview.js");
@@ -292,6 +300,14 @@ export async function startDiscord(): Promise<void> {
           await import("../discord/commands/projectDelete.js");
 
         await projectDeleteCommand.execute(interaction);
+        return;
+      }
+
+      if (interaction.commandName === "project-task-delete") {
+        const { projectTaskDeleteCommand } =
+          await import("../discord/commands/projectTaskDelete.js");
+
+        await projectTaskDeleteCommand.execute(interaction);
         return;
       }
 
