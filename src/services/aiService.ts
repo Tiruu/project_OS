@@ -1111,6 +1111,7 @@ async function callGemini(
   thinkingLevel: "minimal" | "low" | "medium" | "high",
   input: string,
   instructions: string,
+  responseSchema = AI_REVIEW_JSON_SCHEMA,
 ): Promise<GeminiInteractionResponse> {
   const url =
     "https://generativelanguage.googleapis.com/v1beta/interactions";
@@ -1131,7 +1132,7 @@ async function callGemini(
         response_format: {
           type: "text",
           mime_type: "application/json",
-          schema: AI_REVIEW_JSON_SCHEMA,
+          schema: responseSchema,
         },
         generation_config: {
           thinking_level: thinkingLevel,
@@ -1486,72 +1487,350 @@ async function reviewProjectWithOllama(
   );
 }
 
-function isDevelopmentPlanningQuestion(question: string): boolean {
-  const text = question.toLowerCase();
 
-  return [
-    "suite du développement",
+type ProjectAskMode = "GENERAL" | "PLANNING" | "FEATURE";
+
+type ProjectAskPlanning = {
+  title: string;
+  why_now: string;
+  files: string[];
+  expected: string;
+  success: string;
+  evidence: string[];
+};
+
+type ProjectAskFeature = {
+  feature: string;
+  fit: string;
+  capabilities: string;
+  evidence: string[];
+  complexity: string;
+};
+
+type ProjectAskGeneral = {
+  answer: string;
+};
+
+const PROJECT_ASK_PLANNING_SCHEMA = {
+  type: "object",
+  required: ["title", "why_now", "files", "expected", "success", "evidence"],
+  properties: {
+    title: { type: "string" },
+    why_now: { type: "string" },
+    files: { type: "array", items: { type: "string" } },
+    expected: { type: "string" },
+    success: { type: "string" },
+    evidence: { type: "array", items: { type: "string" } },
+  },
+} as const;
+
+const PROJECT_ASK_FEATURE_SCHEMA = {
+  type: "object",
+  required: ["feature", "fit", "capabilities", "evidence", "complexity"],
+  properties: {
+    feature: { type: "string" },
+    fit: { type: "string" },
+    capabilities: { type: "string" },
+    evidence: { type: "array", items: { type: "string" } },
+    complexity: { type: "string" },
+  },
+} as const;
+
+const PROJECT_ASK_GENERAL_SCHEMA = {
+  type: "object",
+  required: ["answer"],
+  properties: {
+    answer: { type: "string" },
+  },
+} as const;
+
+function normalizeQuestion(value: string): string {
+  return value
+    .toLowerCase()
+    .normalize("NFD")
+    .replace(/[\\u0300-\\u036f]/g, "");
+}
+
+function classifyProjectAskMode(question: string): ProjectAskMode {
+  const normalized = normalizeQuestion(question);
+
+  const planningPatterns = [
     "suite du developpement",
+    "suite du developpement de mon jeu",
     "prochaine modification",
-    "prochaine tâche",
     "prochaine tache",
-    "prochaine fonctionnalité",
-    "prochaine fonctionnalite",
+    "prochain etape",
+    "prochaine etape",
     "quoi faire ensuite",
     "que faire ensuite",
-    "quelle modification",
+    "quelle modification apporter",
     "next step",
     "next task",
-    "next feature",
-  ].some((phrase) => text.includes(phrase));
-}
+  ];
 
-function isFeatureIdeationQuestion(question: string): boolean {
-  const text = question.toLowerCase();
-
-  return [
-    "quelle fonctionnalité ajouter",
-    "quelle fonctionnalite ajouter",
-    "quelle feature ajouter",
-    "quelle fonctionnalité développer",
-    "quelle fonctionnalite developper",
-    "donne-moi une bonne fonctionnalité",
-    "donne moi une bonne fonctionnalité",
-    "donne-moi une bonne fonctionnalite",
-    "donne moi une bonne fonctionnalite",
-    "propose une fonctionnalité",
-    "propose une fonctionnalite",
-  ].some((phrase) => text.includes(phrase));
-}
-
-function isStructuredPlanningAnswer(
-  answer: string,
-  featureMode: boolean,
-): boolean {
-  const normalized = answer.toLowerCase();
-
-  if (featureMode) {
-    return (
-      normalized.includes("fonctionnalité") &&
-      normalized.includes("pourquoi") &&
-      normalized.includes("ce qu'elle permet") &&
-      normalized.includes("preuves") &&
-      normalized.includes("complexité")
-    );
+  if (planningPatterns.some((pattern) => normalized.includes(pattern))) {
+    return "PLANNING";
   }
 
-  return (
-    normalized.includes("modification proposée") &&
-    normalized.includes("pourquoi maintenant") &&
-    normalized.includes("fichiers concernés") &&
-    normalized.includes("résultat attendu") &&
-    normalized.includes("critère de réussite")
-  );
+  const featurePatterns = [
+    "quelle fonctionnalite ajouter",
+    "quelle fonctionnalite developper",
+    "quelle feature ajouter",
+    "donne moi une bonne fonctionnalite",
+    "donne-moi une bonne fonctionnalite",
+    "propose une fonctionnalite",
+    "fonctionnalite a ajouter",
+    "fonctionnalite à ajouter",
+  ];
+
+  if (featurePatterns.some((pattern) => normalized.includes(pattern))) {
+    return "FEATURE";
+  }
+
+  return "GENERAL";
 }
 
-async function requestProjectAskText(
+function buildProjectAskInput(
+  context: ProjectAiContext,
+  question: string,
+  mode: ProjectAskMode,
+): string {
+  const payload: Record<string, unknown> = {
+    question,
+    mode,
+    project: context.project_os.project,
+    active_tasks: context.project_os.active_tasks,
+    active_decisions: context.project_os.active_decisions,
+    recent_activities: context.project_os.recent_activities.slice(0, 12),
+    repository: {
+      name: context.repository.name,
+      full_name: context.repository.full_name,
+      default_branch: context.repository.default_branch,
+    },
+    selected_files: context.selected_files.map((file) => ({
+      path: file.path,
+      reason: file.reason,
+      content: file.content,
+    })),
+  };
+
+  if (mode === "GENERAL") {
+    payload.repository_tree = context.repository_tree.slice(0, 120);
+    payload.readme = context.readme;
+    payload.package_json = context.package_json;
+  }
+
+  return JSON.stringify(payload);
+}
+
+function buildProjectAskInstructions(mode: ProjectAskMode): string {
+  const common = [
+    "Tu es l'assistant de décision de Project OS.",
+    "Ta mission est de répondre à UNE question précise sur un projet.",
+    "Tu ne dois pas transformer la question en audit général du projet.",
+    "",
+    "SOURCE DE VÉRITÉ :",
+    "1. Le contenu actuel des fichiers fournis est la preuve principale du comportement du code.",
+    "2. Les données Project OS décrivent l'état enregistré : seules active_tasks et active_decisions sont des éléments actuels.",
+    "3. Les activités AI_REVIEW, AI_TASK_CREATED et AI_TASK_IGNORED sont historiques et ne servent jamais de preuve de l'état actuel.",
+    "4. Les documents peuvent être obsolètes. Ils servent à comprendre le contexte, pas à contredire le code actuel sans preuve.",
+    "5. Si une responsabilité a été déplacée entre fichiers, suis les appels jusqu'au fichier qui implémente réellement le comportement.",
+    "6. N'invente jamais une fonction, un fichier, une décision ou un besoin.",
+    "7. Quand une information n'est pas déterminable, dis-le plutôt que de l'imaginer.",
+    "",
+    "CE QUE TU DOIS ÉVITER :",
+    "Ne commence pas par 'voici une analyse du jeu', 'core mechanics', 'game overview', 'technical strengths' ou un résumé de l'architecture.",
+    "Ne réponds pas à une question différente de celle contenue dans le champ question.",
+    "Ne transforme pas une absence de fonctionnalité en problème simplement parce qu'elle est absente.",
+    "Ne propose pas plusieurs options de roadmap quand une seule réponse est demandée.",
+  ];
+
+  if (mode === "PLANNING") {
+    return [
+      ...common,
+      "",
+      "MODE : PROCHAINE ÉTAPE DE DÉVELOPPEMENT",
+      "La question demande ce qu'il faut modifier ensuite dans le jeu.",
+      "Tu dois choisir UNE seule modification.",
+      "Ordre de décision : active_tasks pertinentes, puis active_decisions pertinentes, puis état récent, puis code actuel.",
+      "Une tâche active pertinente doit être privilégiée plutôt qu'une nouvelle idée.",
+      "S'il n'existe pas de tâche active pertinente, choisis une amélioration ou extension réellement justifiée par le code actuel.",
+      "La proposition doit être concrète, localisable dans le code et testable.",
+      "Ne propose pas une amélioration générique comme 'améliorer le game feel' sans comportement précis.",
+      "Ne prétends pas qu'un comportement est absent sans avoir vérifié la responsabilité réelle dans les fichiers fournis.",
+      "La réponse doit permettre de créer immédiatement UNE tâche de développement.",
+      "",
+      "RENVOIE UNIQUEMENT UN OBJET JSON conforme au schéma fourni.",
+      "title = nom court de la modification.",
+      "why_now = raison factuelle liée à l'état actuel.",
+      "files = fichiers réellement concernés ou à vérifier ; n'en invente aucun.",
+      "expected = résultat observable après la modification.",
+      "success = critère de réussite vérifiable.",
+      "evidence = 1 à 4 preuves courtes issues du code actuel ou de Project OS.",
+    ].join("\n");
+  }
+
+  if (mode === "FEATURE") {
+    return [
+      ...common,
+      "",
+      "MODE : IDÉATION DE FONCTIONNALITÉ",
+      "La question demande UNE fonctionnalité à ajouter au jeu.",
+      "Choisis une fonctionnalité nouvelle qui s'intègre aux capacités actuellement observables.",
+      "Ne propose pas une fonctionnalité déjà présente sous un autre nom.",
+      "Ne déduis pas un besoin utilisateur non observé ; explique plutôt la valeur potentielle dans le workflow actuel.",
+      "Vérifie le code fourni avant d'affirmer qu'une capacité n'existe pas.",
+      "",
+      "RENVOIE UNIQUEMENT UN OBJET JSON conforme au schéma fourni.",
+      "feature = nom de la fonctionnalité.",
+      "fit = pourquoi elle s'intègre au jeu existant.",
+      "capabilities = ce qu'elle permettrait concrètement.",
+      "evidence = 1 à 4 preuves courtes.",
+      "complexity = faible, moyenne ou élevée, avec une justification très courte.",
+    ].join("\n");
+  }
+
+  return [
+    ...common,
+    "",
+    "MODE : RÉPONSE DIRECTE",
+    "Réponds directement à la question. N'ajoute un état des lieux du projet que si la question le demande.",
+    "",
+    "RENVOIE UNIQUEMENT UN OBJET JSON conforme au schéma fourni.",
+    "answer = réponse complète, concise et factuelle à la question.",
+  ].join("\n");
+}
+
+function getProjectAskSchema(mode: ProjectAskMode) {
+  if (mode === "PLANNING") return PROJECT_ASK_PLANNING_SCHEMA;
+  if (mode === "FEATURE") return PROJECT_ASK_FEATURE_SCHEMA;
+  return PROJECT_ASK_GENERAL_SCHEMA;
+}
+
+function parseProjectAskResult(
+  content: string,
+  mode: ProjectAskMode,
+): ProjectAskPlanning | ProjectAskFeature | ProjectAskGeneral {
+  const parsed = parseJsonObject(content);
+
+  if (!parsed || typeof parsed !== "object") {
+    throw new Error("La réponse IA de /project-ask n'est pas un JSON exploitable.");
+  }
+
+  const value = parsed as Record<string, unknown>;
+
+  if (mode === "PLANNING") {
+    if (
+      typeof value.title !== "string" ||
+      typeof value.why_now !== "string" ||
+      !Array.isArray(value.files) ||
+      typeof value.expected !== "string" ||
+      typeof value.success !== "string" ||
+      !Array.isArray(value.evidence)
+    ) {
+      throw new Error("La réponse IA planning n'est pas conforme.");
+    }
+
+    return {
+      title: value.title,
+      why_now: value.why_now,
+      files: value.files.filter((item): item is string => typeof item === "string"),
+      expected: value.expected,
+      success: value.success,
+      evidence: value.evidence.filter(
+        (item): item is string => typeof item === "string",
+      ),
+    };
+  }
+
+  if (mode === "FEATURE") {
+    if (
+      typeof value.feature !== "string" ||
+      typeof value.fit !== "string" ||
+      typeof value.capabilities !== "string" ||
+      !Array.isArray(value.evidence) ||
+      typeof value.complexity !== "string"
+    ) {
+      throw new Error("La réponse IA feature n'est pas conforme.");
+    }
+
+    return {
+      feature: value.feature,
+      fit: value.fit,
+      capabilities: value.capabilities,
+      evidence: value.evidence.filter(
+        (item): item is string => typeof item === "string",
+      ),
+      complexity: value.complexity,
+    };
+  }
+
+  if (typeof value.answer !== "string") {
+    throw new Error("La réponse IA générale n'est pas conforme.");
+  }
+
+  return { answer: value.answer };
+}
+
+function renderProjectAskResult(
+  result: ProjectAskPlanning | ProjectAskFeature | ProjectAskGeneral,
+  mode: ProjectAskMode,
+): string {
+  if (mode === "PLANNING") {
+    const planning = result as ProjectAskPlanning;
+
+    return [
+      "### " + planning.title,
+      "",
+      "**Pourquoi maintenant**",
+      planning.why_now,
+      "",
+      "**Fichiers concernés**",
+      planning.files.length > 0
+        ? planning.files.map((file) => "• " + file).join("\n")
+        : "À déterminer à partir du code local.",
+      "",
+      "**Résultat attendu**",
+      planning.expected,
+      "",
+      "**Critère de réussite**",
+      planning.success,
+      "",
+      ...(planning.evidence.length > 0
+        ? ["**Base factuelle**", planning.evidence.map((item) => "• " + item).join("\n")]
+        : []),
+    ].join("\n");
+  }
+
+  if (mode === "FEATURE") {
+    const feature = result as ProjectAskFeature;
+
+    return [
+      "### " + feature.feature,
+      "",
+      "**Pourquoi elle s'intègre au jeu**",
+      feature.fit,
+      "",
+      "**Ce qu'elle permettrait de faire**",
+      feature.capabilities,
+      "",
+      "**Preuves dans le code actuel**",
+      feature.evidence.length > 0
+        ? feature.evidence.map((item) => "• " + item).join("\n")
+        : "Aucune preuve directe suffisante dans le contexte fourni.",
+      "",
+      "**Complexité estimée**",
+      feature.complexity,
+    ].join("\n");
+  }
+
+  return (result as ProjectAskGeneral).answer;
+}
+
+async function requestProjectAskStructured(
   input: string,
   instructions: string,
+  schema: object,
 ): Promise<string> {
   const provider = getAiProvider();
 
@@ -1565,6 +1844,7 @@ async function requestProjectAskText(
         config.thinkingLevel,
         input,
         instructions,
+        schema,
       );
 
       const content = getGeminiContent(response);
@@ -1572,13 +1852,13 @@ async function requestProjectAskText(
         return content;
       }
 
-      throw new Error("Gemini a répondu sans contenu texte exploitable.");
+      throw new Error("Gemini a répondu sans contenu exploitable.");
     } catch (error) {
       if (
         error instanceof Error &&
         (
-          error.message.startsWith("GEMINI_RATE_LIMIT") ||
-          error.message.includes("sans contenu texte exploitable")
+          error.message.startsWith("GEMINI_RATE_LIMIT:") ||
+          error.message.includes("sans contenu exploitable")
         )
       ) {
         const fallback = getOllamaConfig();
@@ -1586,10 +1866,14 @@ async function requestProjectAskText(
           model: fallback.model,
           stream: false,
           think: false,
+          format: schema,
           messages: [
             { role: "system", content: instructions },
             { role: "user", content: input },
           ],
+          options: {
+            temperature: 0,
+          },
         });
 
         const content = response.message?.content?.trim() ?? "";
@@ -1597,9 +1881,7 @@ async function requestProjectAskText(
           return content;
         }
 
-        throw new Error(
-          "Le modèle de secours Ollama n'a renvoyé aucun contenu texte.",
-        );
+        throw new Error("Ollama n'a renvoyé aucun contenu exploitable.");
       }
 
       throw error;
@@ -1611,140 +1893,36 @@ async function requestProjectAskText(
     model: config.model,
     stream: false,
     think: false,
+    format: schema,
     messages: [
       { role: "system", content: instructions },
       { role: "user", content: input },
     ],
+    options: {
+      temperature: 0,
+    },
   });
 
   const content = response.message?.content?.trim() ?? "";
-  if (content) {
-    return content;
+  if (!content) {
+    throw new Error("Ollama n'a renvoyé aucun contenu exploitable.");
   }
 
-  throw new Error(
-    "Ollama n'a renvoyé aucun contenu texte pour /project-ask.",
-  );
+  return content;
 }
 
 export async function askProjectWithAI(
   context: ProjectAiContext,
   question: string,
 ): Promise<string> {
-  const planningMode = isDevelopmentPlanningQuestion(question);
-  const featureMode = isFeatureIdeationQuestion(question);
+  const mode = classifyProjectAskMode(question);
+  const input = buildProjectAskInput(context, question, mode);
+  const instructions = buildProjectAskInstructions(mode);
+  const schema = getProjectAskSchema(mode);
+  const raw = await requestProjectAskStructured(input, instructions, schema);
+  const result = parseProjectAskResult(raw, mode);
 
-  const input = JSON.stringify({
-    question,
-    project_os: context.project_os,
-    repository: context.repository,
-    repository_tree: context.repository_tree.slice(0, planningMode ? 100 : 120),
-    selected_files: context.selected_files.map((file) => ({
-      path: file.path,
-      reason: file.reason,
-      content: file.content,
-    })),
-    ...(planningMode
-      ? {}
-      : {
-          readme: context.readme,
-          package_json: context.package_json,
-        }),
-  });
-
-  const instructions = [
-    "Tu es l'assistant de contexte de Project OS.",
-    "Réponds en français, directement et de façon exploitable à la question.",
-    "La question actuelle est l'unique objectif de ta réponse.",
-    "Ne produis pas un résumé générique du projet sauf si la question demande explicitement un résumé.",
-    "Ne réponds pas à une question précédente et ne transforme pas le contexte fourni en rapport d'analyse autonome.",
-    "Utilise uniquement les éléments présents dans le contexte fourni.",
-    "Distingue les faits observés des déductions.",
-    "Ne prétends pas avoir exécuté le projet si le contexte ne le démontre pas.",
-    "Quand une information manque, dis précisément ce qui n'est pas déterminable à partir du contexte fourni.",
-    "Donne des références de fichiers quand elles sont disponibles.",
-    "",
-    "MODE DE LA QUESTION :",
-    planningMode
-      ? "La question demande une prochaine étape de développement. Tu dois proposer UNE modification concrète, pas un audit général."
-      : featureMode
-        ? "La question demande une idée de fonctionnalité. Tu dois proposer UNE fonctionnalité principale, pas un audit général."
-        : "Réponds directement à la demande sans imposer un format de roadmap.",
-    "",
-    "Hiérarchie des preuves pour le code :",
-    "1. Le contenu actuel d'un fichier GitHub sélectionné est la source de vérité pour ce que ce fichier implémente.",
-    "2. Les données Project OS courantes décrivent l'état enregistré du projet, mais ne prouvent pas le comportement du code.",
-    "3. Dans Project OS, seules les décisions présentes dans active_decisions sont des décisions actuelles.",
-    "4. Les tâches présentes dans active_tasks sont les tâches courantes. Une tâche DONE est historique.",
-    "5. Les activités AI_REVIEW, AI_TASK_CREATED et AI_TASK_IGNORED sont historiques et ne doivent jamais être utilisées comme preuve de l'état actuel du code.",
-    "6. Le journal, README et autres documents peuvent contenir de l'historique ou des descriptions obsolètes ; ils ne remplacent jamais le code actuel.",
-    "7. Une affirmation documentaire disant qu'une fonction existe ou qu'un comportement est actuel doit être vérifiée dans le contenu du fichier concerné.",
-    "8. N'invente jamais une ligne, une fonction, une décision actuelle ou une référence de fichier.",
-    "",
-    "Quand plusieurs sources divergent, donne priorité au code actuel pour décrire le comportement présent.",
-    "Pour analyser une fonctionnalité ou une lacune, suis les appels entre fichiers jusqu'à la responsabilité qui implémente réellement le comportement.",
-    "Ne considère jamais un fichier d'orchestration comme propriétaire d'un comportement simplement parce qu'il contient un bouton, un signal, un appel ou une connexion.",
-    "Quand tu affirmes qu'un comportement n'existe pas, vérifie d'abord les fonctions appelées et les services directement responsables visibles dans le contexte. Si cette vérification est impossible, formule la conclusion comme indéterminée.",
-    "",
-    ...(planningMode
-      ? [
-          "Pour la suite du développement, examine en priorité active_tasks, active_decisions, project.current_state, recent_activities et les fichiers de code gameplay pertinents.",
-          "Ne fais pas de project.godot, de configuration moteur ou de métadonnées de dépôt le sujet principal sauf si elles influencent directement la modification proposée.",
-          "Une fonctionnalité ou amélioration absente n'est pas automatiquement un problème : propose-la uniquement si elle constitue une suite cohérente à ce qui est déjà observable.",
-          "Propose UNE seule modification.",
-          "Format obligatoire :",
-          "Modification proposée :",
-          "Pourquoi maintenant :",
-          "Fichiers concernés :",
-          "Résultat attendu :",
-          "Critère de réussite :",
-          "La réponse doit pouvoir être transformée directement en tâche de développement.",
-          "Ne produis pas de section Game Overview, Core Mechanics, Player Experience Flow, Technical Strengths, Opportunities for Refinement ou équivalent.",
-        ]
-      : []),
-    ...(featureMode
-      ? [
-          "Dans ce mode idéation, pars d'abord des capacités réellement observées dans le code actuel.",
-          "Ne propose pas une fonctionnalité déjà présente sous un autre nom.",
-          "Ne réintroduis jamais une ancienne fonctionnalité uniquement parce qu'une ancienne AI_REVIEW ou un ancien document la mentionne.",
-          "Ne traite jamais l'état Project OS 'Importé depuis GitHub' comme une mesure de maturité.",
-          "Propose UNE seule fonctionnalité.",
-          "Format obligatoire :",
-          "Fonctionnalité :",
-          "Pourquoi elle s'intègre au produit :",
-          "Ce qu'elle permettrait de faire :",
-          "Preuves dans le code actuel :",
-          "Complexité estimée :",
-        ]
-      : []),
-    "",
-    "Pour toute proposition technique, indique la responsabilité réellement concernée (fichier + fonction si visible) et distingue le flux qui y mène de l'endroit qui implémente réellement le comportement.",
-    "Évite les formulations vagues comme 'améliorer le game feel'. Donne un objectif observable et un critère de réussite.",
-  ].join("\n");
-
-  let answer = await requestProjectAskText(input, instructions);
-
-  if (
-    (planningMode || featureMode) &&
-    !isStructuredPlanningAnswer(answer, featureMode)
-  ) {
-    const correctionInstructions = [
-      instructions,
-      "",
-      "CORRECTION OBLIGATOIRE :",
-      "Ta réponse précédente n'a pas répondu dans le format demandé.",
-      "Réécris entièrement la réponse.",
-      featureMode
-        ? "Donne uniquement UNE fonctionnalité et respecte exactement les cinq rubriques demandées."
-        : "Donne uniquement UNE prochaine modification et respecte exactement les cinq rubriques demandées.",
-      "Ne recommence pas par un résumé du jeu ou de son architecture.",
-      "Ne mentionne pas cette correction et ne commente pas ta réponse précédente.",
-    ].join("\n");
-
-    answer = await requestProjectAskText(input, correctionInstructions);
-  }
-
-  return answer;
+  return renderProjectAskResult(result, mode);
 }
 
 export async function reviewProjectWithAI(
