@@ -1538,7 +1538,7 @@ export async function askProjectWithAI(
     "Quand une fonctionnalité proposée existe déjà partiellement dans le code ou la base, signale précisément ce qui existe déjà et ce qu'il resterait à compléter.",
     "Pour une question de prochaine tâche opérationnelle, ne propose pas une tâche simplement parce qu'un ancien document décrit une autre architecture ou un ancien comportement.",
     "Dans Preuves, distingue explicitement 'Code actuel', 'Project OS' et 'Documentation' quand plusieurs sources sont utilisées.",
-    "Si la question demande une idée de fonctionnalité, ne réponds pas qu'aucune tâche n'est justifiée simplement parce que TODO/IN_PROGRESS est vide.";
+    "Si la question demande une idée de fonctionnalité, ne réponds pas qu'aucune tâche n'est justifiée simplement parce que TODO/IN_PROGRESS est vide.",
   ].join("\n");
 
   const provider = getAiProvider();
