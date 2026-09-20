@@ -4,8 +4,8 @@ import {
   SlashCommandBuilder,
 } from "discord.js";
 
+import { createActivity, getActivities } from "../../services/activityService.js";
 import { getGithubRepositories } from "../../services/githubRepositoryService.js";
-import { getActivities } from "../../services/activityService.js";
 import { getProjects } from "../../services/projectService.js";
 import { getGithubRepositoryContext } from "../../services/githubContextService.js";
 import { reviewProjectWithAI } from "../../services/aiService.js";
@@ -28,84 +28,100 @@ export const projectAiReviewCommand = {
     await interaction.deferReply();
 
     try {
-      const project = await (async () => {
       const projects = await getProjects();
-      const found = projects.find((item) => item.id === projectId);
+      const project = projects.find((item) => item.id === projectId);
 
-      if (!found) {
+      if (!project) {
         throw new Error("Projet introuvable.");
       }
 
-        return found;
-      })();
-
       const repositories = await getGithubRepositories(project.id);
 
-    if (repositories.length === 0) {
-      throw new Error(
-        "Ce projet n'a aucun dépôt GitHub connecté.",
-      );
-    }
+      if (repositories.length === 0) {
+        throw new Error(
+          "Ce projet n'a aucun dépôt GitHub connecté.",
+        );
+      }
 
-    const repository = repositories[0];
+      const repository = repositories[0];
 
-    const [context, activities] = await Promise.all([
-      getGithubRepositoryContext(
-        repository.owner,
-        repository.repository,
-      ),
-      getActivities(project.id),
-    ]);
+      const [context, activities] = await Promise.all([
+        getGithubRepositoryContext(
+          repository.owner,
+          repository.repository,
+        ),
+        getActivities(project.id),
+      ]);
 
-    context.project = {
-      name: project.name,
-      type: project.type,
-      technologies: project.technologies,
-      description: project.description,
-      current_state: project.current_state,
-    };
+      context.project = {
+        name: project.name,
+        type: project.type,
+        technologies: project.technologies,
+        description: project.description,
+        current_state: project.current_state,
+      };
 
-    context.recent_activity = activities
-      .filter((activity) => activity.source === "GITHUB")
-      .slice(0, 10)
-      .map((activity) => activity.title);
+      context.recent_activity = activities
+        .filter((activity) => activity.source === "GITHUB")
+        .slice(0, 10)
+        .map((activity) => activity.title);
 
-    const review = await reviewProjectWithAI(context);
+      const review = await reviewProjectWithAI(context);
 
-    const lines = [
-      `**Analyse IA : ${project.name}**`,
-      "",
-      `**Résumé**`,
-      review.summary,
-      "",
-      `**But probable**`,
-      review.purpose,
-      "",
-      `**Type**`,
-      review.type,
-      "",
-      `**Technologies**`,
-      review.technologies.join(", ") || "Aucune",
-      "",
-      `**État estimé**`,
-      review.current_state,
-      "",
-      `**Confiance**`,
-      `${Math.round(review.confidence * 100)}%`,
-      "",
-      `**Incertitudes**`,
-      ...(review.uncertainties.length > 0
-        ? review.uncertainties.map((item) => `• ${item}`)
-        : ["Aucune"]),
-      "",
-      `**Tâches proposées**`,
-      ...(review.suggested_tasks.length > 0
-        ? review.suggested_tasks.map(
-            (task) =>
-              `• ${task.title} — priorité ${task.priority} — ${task.reason}`,
-          )
-        : ["Aucune"]),
-    ];
+      await createActivity({
+        project_id: project.id,
+        type: "AI_REVIEW",
+        source: "BOT",
+        title: `Analyse IA : ${project.name}`,
+        description: review.summary,
+        metadata: {
+          summary: review.summary,
+          purpose: review.purpose,
+          type: review.type,
+          technologies: review.technologies,
+          current_state: review.current_state,
+          confidence: review.confidence,
+          uncertainties: review.uncertainties,
+          suggested_tasks: review.suggested_tasks,
+        },
+      });
+
+      const lines = [
+        `**Analyse IA : ${project.name}**`,
+        "",
+        "**Résumé**",
+        review.summary,
+        "",
+        "**But probable**",
+        review.purpose,
+        "",
+        "**Type**",
+        review.type,
+        "",
+        "**Technologies**",
+        review.technologies.join(", ") || "Aucune",
+        "",
+        "**État estimé**",
+        review.current_state,
+        "",
+        "**Confiance**",
+        `${Math.round(review.confidence * 100)}%`,
+        "",
+        "**Incertitudes**",
+        ...(review.uncertainties.length > 0
+          ? review.uncertainties.map((item) => `• ${item}`)
+          : ["Aucune"]),
+        "",
+        "**Tâches proposées**",
+        ...(review.suggested_tasks.length > 0
+          ? review.suggested_tasks.map(
+              (task) =>
+                `• ${task.title} — priorité ${task.priority} — ${task.reason}`,
+            )
+          : ["Aucune"]),
+        "",
+        "Aucune tâche n'a été créée automatiquement.",
+      ];
 
       await interaction.editReply(lines.join("\n"));
     } catch (error) {
