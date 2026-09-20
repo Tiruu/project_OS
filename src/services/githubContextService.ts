@@ -30,6 +30,14 @@ type GithubPackageJson = {
 };
 
 export type GithubRepositoryContext = {
+  project?: {
+    name: string;
+    type: string;
+    technologies: string[];
+    description: string | null;
+    current_state: string | null;
+  };
+  recent_activity?: string[];
   repository: {
     name: string;
     full_name: string;
