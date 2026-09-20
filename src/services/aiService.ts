@@ -25,13 +25,14 @@ type OllamaThinkLevel =
   | "high"
   | "max";
 
-type GeminiGenerateResponse = {
-  candidates?: Array<{
-    content?: {
-      parts?: Array<{
-        text?: string;
-      }>;
-    };
+type GeminiInteractionResponse = {
+  status?: string;
+  steps?: Array<{
+    type?: string;
+    content?: Array<{
+      type?: string;
+      text?: string;
+    }>;
   }>;
 };
 
@@ -114,7 +115,7 @@ function getAiProvider(): AiProvider {
 function getGeminiConfig(): {
   apiKey: string;
   model: string;
-  thinkingBudget: number;
+  thinkingLevel: "minimal" | "low" | "medium" | "high";
 } {
   const apiKey = process.env.GEMINI_API_KEY?.trim();
 
@@ -124,20 +125,23 @@ function getGeminiConfig(): {
     );
   }
 
-  const rawThinkingBudget =
-    process.env.GEMINI_THINKING_BUDGET?.trim() || "0";
-  const parsedThinkingBudget = Number.parseInt(rawThinkingBudget, 10);
-  const thinkingBudget =
-    Number.isFinite(parsedThinkingBudget) && parsedThinkingBudget >= 0
-      ? Math.min(parsedThinkingBudget, 24576)
-      : 0;
+  const rawThinkingLevel =
+    process.env.GEMINI_THINKING_LEVEL?.trim().toLowerCase() ||
+    "minimal";
+
+  const thinkingLevel =
+    rawThinkingLevel === "low" ||
+    rawThinkingLevel === "medium" ||
+    rawThinkingLevel === "high"
+      ? rawThinkingLevel
+      : "minimal";
 
   return {
     apiKey,
     model:
       process.env.GEMINI_MODEL?.trim() ||
-      "gemini-2.5-flash",
-    thinkingBudget,
+      "gemini-3.6-flash",
+    thinkingLevel,
   };
 }
 
@@ -799,17 +803,101 @@ function tryParseAiReview(
   }
 }
 
+const AI_REVIEW_JSON_SCHEMA = {
+  type: "object",
+  required: [
+    "summary",
+    "purpose",
+    "type",
+    "technologies",
+    "inferred_state",
+    "state_evidence",
+    "observed_features",
+    "contradictions",
+    "confidence",
+    "uncertainties",
+    "suggested_tasks",
+  ],
+  properties: {
+    summary: { type: "string" },
+    purpose: { type: "string" },
+    type: { type: "string" },
+    technologies: { type: "array", items: { type: "string" } },
+    inferred_state: { type: "string" },
+    state_evidence: { type: "array", items: { type: "string" } },
+    observed_features: {
+      type: "array",
+      items: {
+        type: "object",
+        required: ["name", "description", "evidence"],
+        properties: {
+          name: { type: "string" },
+          description: { type: "string" },
+          evidence: { type: "array", items: { type: "string" } },
+        },
+      },
+    },
+    contradictions: {
+      type: "array",
+      items: {
+        type: "object",
+        required: ["title", "description", "evidence", "confidence"],
+        properties: {
+          title: { type: "string" },
+          description: { type: "string" },
+          evidence: { type: "array", items: { type: "string" } },
+          confidence: { type: "number" },
+        },
+      },
+    },
+    confidence: { type: "number" },
+    uncertainties: { type: "array", items: { type: "string" } },
+    suggested_tasks: {
+      type: "array",
+      items: {
+        type: "object",
+        required: [
+          "title",
+          "task_kind",
+          "priority",
+          "problem",
+          "reason",
+          "evidence",
+          "confidence",
+        ],
+        properties: {
+          title: { type: "string" },
+          task_kind: {
+            type: "string",
+            enum: [
+              "BUG",
+              "INCOMPLETE",
+              "DESIGN_GAP",
+              "REFACTOR",
+              "DOCUMENTATION",
+              "TEST",
+            ],
+          },
+          priority: { type: "integer" },
+          problem: { type: "string" },
+          reason: { type: "string" },
+          evidence: { type: "array", items: { type: "string" } },
+          confidence: { type: "number" },
+        },
+      },
+    },
+  },
+} as const;
+
 async function callGemini(
   apiKey: string,
   model: string,
-  thinkingBudget: number,
+  thinkingLevel: "minimal" | "low" | "medium" | "high",
   input: string,
   instructions: string,
-): Promise<GeminiGenerateResponse> {
+): Promise<GeminiInteractionResponse> {
   const url =
-    "https://generativelanguage.googleapis.com/v1beta/models/" +
-    encodeURIComponent(model) +
-    ":generateContent";
+    "https://generativelanguage.googleapis.com/v1beta/interactions";
 
   let response: Response;
 
@@ -821,53 +909,45 @@ async function callGemini(
         "x-goog-api-key": apiKey,
       },
       body: JSON.stringify({
-        systemInstruction: {
-          parts: [{ text: instructions }],
+        model,
+        input,
+        system_instruction: instructions,
+        response_format: {
+          type: "text",
+          mime_type: "application/json",
+          schema: AI_REVIEW_JSON_SCHEMA,
         },
-        contents: [
-          {
-            role: "user",
-            parts: [
-              {
-                text:
-                  "Analyse ce dépôt GitHub pour Project OS.\n\n" +
-                  input,
-              },
-            ],
-          },
-        ],
-        generationConfig: {
-          responseMimeType: "application/json",
-          thinkingConfig: {
-            thinkingBudget,
-          },
+        generation_config: {
+          thinking_level: thinkingLevel,
         },
       }),
     });
   } catch {
     throw new Error(
-      "Impossible de joindre l'API Gemini. Vérifie ta connexion et ta clé GEMINI_API_KEY.",
+      "Impossible de joindre l'API Gemini Interactions. Vérifie ta connexion et ta clé GEMINI_API_KEY.",
     );
   }
 
   if (!response.ok) {
     const errorBody = await response.text();
-
     throw new Error(
-      "Gemini API " +
-        response.status +
-        " : " +
-        errorBody.slice(0, 500),
+      "Gemini API " + response.status + " : " + errorBody.slice(0, 500),
     );
   }
 
-  return (await response.json()) as GeminiGenerateResponse;
+  return (await response.json()) as GeminiInteractionResponse;
 }
 
-function getGeminiContent(response: GeminiGenerateResponse): string {
+function getGeminiContent(
+  response: GeminiInteractionResponse,
+): string {
   return (
-    response.candidates?.[0]?.content?.parts
-      ?.map((part) => part.text?.trim() || "")
+    response.steps
+      ?.flatMap((step) =>
+        step.content
+          ?.filter((part) => part.type === "text" && part.text)
+          .map((part) => part.text!.trim()) ?? [],
+      )
       .filter(Boolean)
       .join("\n")
       .trim() || ""
@@ -877,14 +957,14 @@ function getGeminiContent(response: GeminiGenerateResponse): string {
 async function requestGeminiReview(
   apiKey: string,
   model: string,
-  thinkingBudget: number,
+  thinkingLevel: "minimal" | "low" | "medium" | "high",
   input: string,
   instructions: string,
-): Promise<GeminiGenerateResponse> {
+): Promise<GeminiInteractionResponse> {
   return callGemini(
     apiKey,
     model,
-    thinkingBudget,
+    thinkingLevel,
     input,
     instructions,
   );
@@ -893,14 +973,14 @@ async function requestGeminiReview(
 async function reviewProjectWithGemini(
   context: ProjectAiContext,
 ): Promise<AiReview> {
-  const { apiKey, model, thinkingBudget } = getGeminiConfig();
+  const { apiKey, model, thinkingLevel } = getGeminiConfig();
   const instructions = buildInstructions();
   const input = JSON.stringify(context);
 
   const response = await requestGeminiReview(
     apiKey,
     model,
-    thinkingBudget,
+    thinkingLevel,
     input,
     instructions,
   );
@@ -916,7 +996,7 @@ async function reviewProjectWithGemini(
   const compactResponse = await requestGeminiReview(
     apiKey,
     model,
-    thinkingBudget,
+    thinkingLevel,
     compactInput,
     [
       instructions,
@@ -939,7 +1019,7 @@ async function reviewProjectWithGemini(
   }
 
   throw new Error(
-    "Gemini a répondu sans JSON exploitable. Les tentatives normale et compacte ont échoué.",
+    "Gemini a répondu sans JSON exploitable via l'Interactions API. Les tentatives normale et compacte ont échoué.",
   );
 }
 
