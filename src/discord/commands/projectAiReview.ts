@@ -243,8 +243,12 @@ export const projectAiReviewCommand = {
               (task) =>
                 "• **" +
                 task.title +
-                "** — priorité " +
+                "** [" +
+                task.task_kind +
+                "] — priorité " +
                 task.priority +
+                " — " +
+                task.problem +
                 " — " +
                 task.reason +
                 " [preuve: " +
@@ -253,7 +257,9 @@ export const projectAiReviewCommand = {
                 Math.round(task.confidence * 100) +
                 "%]",
             )
-          : ["Aucune"]),
+          : [
+              "Aucune tâche : aucune action suffisamment justifiée n'a été identifiée.",
+            ]),
         "",
         "Aucune tâche n'a été créée automatiquement.",
       ];
