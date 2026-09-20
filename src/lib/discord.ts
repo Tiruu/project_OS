@@ -235,6 +235,14 @@ export async function startDiscord(): Promise<void> {
         await projectDeleteCommand.execute(interaction);
         return;
       }
+
+      if (interaction.commandName === "project-discover") {
+        const { projectDiscoverCommand } =
+          await import("../discord/commands/projectDiscover.js");
+
+        await projectDiscoverCommand.execute(interaction);
+        return;
+      }
     } catch (error) {
       console.error(
         `Erreur pendant l'exécution de /${interaction.commandName} :`,
