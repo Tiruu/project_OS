@@ -19,7 +19,6 @@ export async function startDiscord(): Promise<void> {
         if (interaction.commandName === "project-show") {
           const { projectShowCommand } =
             await import("../discord/commands/projectShow.js");
-
           await projectShowCommand.autocomplete(interaction);
           return;
         }
@@ -27,7 +26,6 @@ export async function startDiscord(): Promise<void> {
         if (interaction.commandName === "project-task") {
           const { projectTaskCommand } =
             await import("../discord/commands/projectTask.js");
-
           await projectTaskCommand.autocomplete(interaction);
           return;
         }
@@ -35,7 +33,6 @@ export async function startDiscord(): Promise<void> {
         if (interaction.commandName === "project-done") {
           const { projectDoneCommand } =
             await import("../discord/commands/projectDone.js");
-
           await projectDoneCommand.autocomplete(interaction);
           return;
         }
@@ -43,7 +40,6 @@ export async function startDiscord(): Promise<void> {
         if (interaction.commandName === "project-status") {
           const { projectStatusCommand } =
             await import("../discord/commands/projectStatus.js");
-
           await projectStatusCommand.autocomplete(interaction);
           return;
         }
@@ -51,7 +47,6 @@ export async function startDiscord(): Promise<void> {
         if (interaction.commandName === "project-decision") {
           const { projectDecisionCommand } =
             await import("../discord/commands/projectDecision.js");
-
           await projectDecisionCommand.autocomplete(interaction);
           return;
         }
@@ -59,7 +54,6 @@ export async function startDiscord(): Promise<void> {
         if (interaction.commandName === "project-note") {
           const { projectNoteCommand } =
             await import("../discord/commands/projectNote.js");
-
           await projectNoteCommand.autocomplete(interaction);
           return;
         }
@@ -67,7 +61,6 @@ export async function startDiscord(): Promise<void> {
         if (interaction.commandName === "project-start") {
           const { projectStartCommand } =
             await import("../discord/commands/projectStart.js");
-
           await projectStartCommand.autocomplete(interaction);
           return;
         }
@@ -75,7 +68,6 @@ export async function startDiscord(): Promise<void> {
         if (interaction.commandName === "project-next") {
           const { projectNextCommand } =
             await import("../discord/commands/projectNext.js");
-
           await projectNextCommand.autocomplete(interaction);
           return;
         }
@@ -83,7 +75,6 @@ export async function startDiscord(): Promise<void> {
         if (interaction.commandName === "project-github") {
           const { projectGithubCommand } =
             await import("../discord/commands/projectGithub.js");
-
           await projectGithubCommand.autocomplete(interaction);
           return;
         }
@@ -91,7 +82,6 @@ export async function startDiscord(): Promise<void> {
         if (interaction.commandName === "project-github-sync") {
           const { projectGithubSyncCommand } =
             await import("../discord/commands/projectGithubSync.js");
-
           await projectGithubSyncCommand.autocomplete(interaction);
           return;
         }
@@ -99,7 +89,6 @@ export async function startDiscord(): Promise<void> {
         if (interaction.commandName === "project-import-github") {
           const { projectImportGithubCommand } =
             await import("../discord/commands/projectImportGithub.js");
-
           await projectImportGithubCommand.autocomplete(interaction);
           return;
         }
@@ -107,7 +96,6 @@ export async function startDiscord(): Promise<void> {
         if (interaction.commandName === "project-delete") {
           const { projectDeleteCommand } =
             await import("../discord/commands/projectDelete.js");
-
           await projectDeleteCommand.autocomplete(interaction);
           return;
         }
@@ -115,65 +103,41 @@ export async function startDiscord(): Promise<void> {
         if (interaction.commandName === "project-task-delete") {
           const { projectTaskDeleteCommand } =
             await import("../discord/commands/projectTaskDelete.js");
-
           await projectTaskDeleteCommand.autocomplete(interaction);
           return;
         }
 
         if (interaction.commandName === "project-brief") {
-          const { projectBriefCommand } = await import("../discord/commands/projectBrief.js");
+          const { projectBriefCommand } =
+            await import("../discord/commands/projectBrief.js");
           await projectBriefCommand.autocomplete(interaction);
           return;
         }
 
         if (interaction.commandName === "project-decision-list") {
-          const { projectDecisionListCommand } = await import("../discord/commands/projectDecisionList.js");
+          const { projectDecisionListCommand } =
+            await import("../discord/commands/projectDecisionList.js");
           await projectDecisionListCommand.autocomplete(interaction);
           return;
         }
 
         if (interaction.commandName === "project-decision-update") {
-          const { projectDecisionUpdateCommand } = await import("../discord/commands/projectDecisionUpdate.js");
+          const { projectDecisionUpdateCommand } =
+            await import("../discord/commands/projectDecisionUpdate.js");
           await projectDecisionUpdateCommand.autocomplete(interaction);
           return;
         }
 
-      if (interaction.commandName === "project-brief") {
-        const { projectBriefCommand } =
-          await import("../discord/commands/projectBrief.js");
+        if (interaction.commandName === "project-ask") {
+          const { projectAskCommand } =
+            await import("../discord/commands/projectAsk.js");
+          await projectAskCommand.autocomplete(interaction);
+          return;
+        }
 
-        await projectBriefCommand.execute(interaction);
-        return;
-      }
-
-      if (interaction.commandName === "project-decision-list") {
-        const { projectDecisionListCommand } =
-          await import("../discord/commands/projectDecisionList.js");
-
-        await projectDecisionListCommand.execute(interaction);
-        return;
-      }
-
-      if (interaction.commandName === "project-decision-update") {
-        const { projectDecisionUpdateCommand } =
-          await import("../discord/commands/projectDecisionUpdate.js");
-
-        await projectDecisionUpdateCommand.execute(interaction);
-        return;
-      }
-
-      if (interaction.commandName === "project-ask") {
-        const { projectAskCommand } =
-          await import("../discord/commands/projectAsk.js");
-
-        await projectAskCommand.execute(interaction);
-        return;
-      }
-
-      if (interaction.commandName === "project-ai-review") {
+        if (interaction.commandName === "project-ai-review") {
           const { projectAiReviewCommand } =
             await import("../discord/commands/projectAiReview.js");
-
           await projectAiReviewCommand.autocomplete(interaction);
           return;
         }
@@ -185,7 +149,9 @@ export async function startDiscord(): Promise<void> {
           error,
         );
 
-        await interaction.respond([]);
+        if (!interaction.responded) {
+          await interaction.respond([]);
+        }
       }
 
       return;
@@ -366,6 +332,38 @@ export async function startDiscord(): Promise<void> {
           await import("../discord/commands/projectDiscover.js");
 
         await projectDiscoverCommand.execute(interaction);
+        return;
+      }
+
+      if (interaction.commandName === "project-brief") {
+        const { projectBriefCommand } =
+          await import("../discord/commands/projectBrief.js");
+
+        await projectBriefCommand.execute(interaction);
+        return;
+      }
+
+      if (interaction.commandName === "project-decision-list") {
+        const { projectDecisionListCommand } =
+          await import("../discord/commands/projectDecisionList.js");
+
+        await projectDecisionListCommand.execute(interaction);
+        return;
+      }
+
+      if (interaction.commandName === "project-decision-update") {
+        const { projectDecisionUpdateCommand } =
+          await import("../discord/commands/projectDecisionUpdate.js");
+
+        await projectDecisionUpdateCommand.execute(interaction);
+        return;
+      }
+
+      if (interaction.commandName === "project-ask") {
+        const { projectAskCommand } =
+          await import("../discord/commands/projectAsk.js");
+
+        await projectAskCommand.execute(interaction);
         return;
       }
 
