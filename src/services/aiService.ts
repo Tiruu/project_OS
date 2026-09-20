@@ -6,108 +6,6 @@ import type {
 } from "../types/aiReview.js";
 import type { GithubRepositoryContext } from "./githubContextService.js";
 
-const reviewSchema = {
-  type: "object",
-  additionalProperties: false,
-  properties: {
-    summary: { type: "string" },
-    purpose: { type: "string" },
-    type: { type: "string" },
-    technologies: {
-      type: "array",
-      items: { type: "string" },
-    },
-    inferred_state: { type: "string" },
-    state_evidence: {
-      type: "array",
-      items: { type: "string" },
-    },
-    observed_features: {
-      type: "array",
-      items: {
-        type: "object",
-        additionalProperties: false,
-        properties: {
-          name: { type: "string" },
-          description: { type: "string" },
-          evidence: {
-            type: "array",
-            items: { type: "string" },
-          },
-        },
-        required: ["name", "description", "evidence"],
-      },
-    },
-    confidence: {
-      type: "number",
-      minimum: 0,
-      maximum: 1,
-    },
-    uncertainties: {
-      type: "array",
-      items: { type: "string" },
-    },
-    suggested_tasks: {
-      type: "array",
-      items: {
-        type: "object",
-        additionalProperties: false,
-        properties: {
-          title: { type: "string" },
-          task_kind: {
-            type: "string",
-            enum: [
-              "BUG",
-              "INCOMPLETE",
-              "DESIGN_GAP",
-              "REFACTOR",
-              "DOCUMENTATION",
-              "TEST",
-            ],
-          },
-          priority: {
-            type: "integer",
-            minimum: 1,
-            maximum: 5,
-          },
-          problem: { type: "string" },
-          reason: { type: "string" },
-          evidence: {
-            type: "array",
-            items: { type: "string" },
-          },
-          confidence: {
-            type: "number",
-            minimum: 0,
-            maximum: 1,
-          },
-        },
-        required: [
-          "title",
-          "task_kind",
-          "priority",
-          "problem",
-          "reason",
-          "evidence",
-          "confidence",
-        ],
-      },
-    },
-  },
-  required: [
-    "summary",
-    "purpose",
-    "type",
-    "technologies",
-    "inferred_state",
-    "state_evidence",
-    "observed_features",
-    "confidence",
-    "uncertainties",
-    "suggested_tasks",
-  ],
-} as const;
-
 type OllamaChatResponse = {
   model?: string;
   done_reason?: string;
@@ -131,6 +29,7 @@ function getOllamaConfig(): {
   think: OllamaThinkLevel;
 } {
   const rawThink = process.env.OLLAMA_THINK?.trim().toLowerCase() || "low";
+
   const think: OllamaThinkLevel =
     rawThink === "false"
       ? false
@@ -153,33 +52,87 @@ function getOllamaConfig(): {
   };
 }
 
-function validateSuggestedTasks(
-  tasks: AiSuggestedTask[],
-): AiSuggestedTask[] {
-  return tasks
-    .filter((task) => task.title.trim().length > 0)
-    .filter((task) => task.problem.trim().length > 0)
-    .filter((task) => task.reason.trim().length > 0)
-    .filter((task) => task.evidence.length > 0)
-    .filter((task) => task.confidence >= 0 && task.confidence <= 1)
-    .filter((task) => task.priority >= 1 && task.priority <= 5)
-    .slice(0, 3);
+function buildInstructions(): string {
+  return [
+    "Tu es l'analyste technique de Project OS.",
+    "",
+    "Comprends le dépôt GitHub fourni puis produis une analyse factuelle pour un développeur solo.",
+    "",
+    "Sources par ordre de confiance :",
+    "1. contenu réel des fichiers sélectionnés",
+    "2. README et documentation",
+    "3. structure du dépôt",
+    "4. configuration",
+    "5. historique GitHub",
+    "6. métadonnées",
+    "7. données déjà stockées dans Project OS",
+    "",
+    "Règles d'analyse :",
+    "- Ne considère jamais un nom de fichier, un dossier ou un commit comme preuve suffisante qu'une fonctionnalité existe.",
+    "- Chaque fonctionnalité observée doit citer un fichier concret.",
+    "- inferred_state décrit l'état réel estimé du projet, pas l'état administratif 'Importé depuis GitHub'.",
+    "- technologies contient uniquement les technologies observables ou très solidement déduites.",
+    "- observed_features contient 2 à 8 sous-systèmes réellement observés quand c'est possible.",
+    "",
+    "Règles de tâches :",
+    "- Tu peux proposer ZERO tâche.",
+    "- Une fonctionnalité absente n'est PAS automatiquement un problème.",
+    "- Avant de proposer une tâche, vérifie dans le code fourni qu'elle n'est pas déjà implémentée.",
+    "- Ne propose jamais une amélioration générique sans problème concret.",
+    "- Une tâche doit décrire un problème réel et fournir au moins une preuve précise.",
+    "- Les types autorisés sont : BUG, INCOMPLETE, DESIGN_GAP, REFACTOR, DOCUMENTATION, TEST.",
+    "- TEST n'est pas justifié simplement parce qu'aucun test n'a été trouvé.",
+    "- DESIGN_GAP n'est pas justifié simplement parce qu'une fonctionnalité n'existe pas.",
+    "- Ne propose pas 'ajouter des notifications', 'gérer les branches', 'ajouter des tests', 'améliorer les performances' ou 'mettre à jour les dépendances' sans défaut précis observé.",
+    "- Maximum 3 tâches. Il vaut mieux produire 0 tâche que d'en inventer.",
+    "",
+    "Réponse :",
+    "- Réponds avec un objet JSON valide uniquement.",
+    "- Aucun markdown, aucune phrase avant ou après le JSON.",
+    "- Champs obligatoires : summary, purpose, type, technologies, inferred_state, state_evidence, observed_features, confidence, uncertainties, suggested_tasks.",
+    "- observed_features contient des objets {name, description, evidence}.",
+    "- suggested_tasks contient des objets {title, task_kind, priority, problem, reason, evidence, confidence}.",
+    "- confidence et les confiances de tâches sont entre 0 et 1.",
+    "- priority est un entier de 1 à 5.",
+    "",
+    "Format JSON attendu :",
+    "{",
+    '  "summary": "string",',
+    '  "purpose": "string",',
+    '  "type": "string",',
+    '  "technologies": ["string"],',
+    '  "inferred_state": "string",',
+    '  "state_evidence": ["string"],',
+    '  "observed_features": [',
+    '    {"name": "string", "description": "string", "evidence": ["string"]}',
+    "  ],",
+    '  "confidence": 0.0,',
+    '  "uncertainties": ["string"],',
+    '  "suggested_tasks": [',
+    '    {"title": "string", "task_kind": "BUG|INCOMPLETE|DESIGN_GAP|REFACTOR|DOCUMENTATION|TEST", "priority": 1, "problem": "string", "reason": "string", "evidence": ["string"], "confidence": 0.0}',
+    "  ]",
+    "}",
+  ].join("\n");
 }
 
 function parseJsonObject(text: string): unknown | null {
-  const candidates = [text.trim()];
+  const trimmed = text.trim();
 
-  const fenced = text.match(/\`\`\`(?:json)?\s*([\s\S]*?)\s*\`\`\`/i);
+  const candidates = [trimmed];
+
+  const fenced = trimmed.match(
+    /\`\`\`(?:json)?\s*([\s\S]*?)\s*\`\`\`/i,
+  );
 
   if (fenced?.[1]) {
     candidates.push(fenced[1].trim());
   }
 
-  const firstBrace = text.indexOf("{");
-  const lastBrace = text.lastIndexOf("}");
+  const firstBrace = trimmed.indexOf("{");
+  const lastBrace = trimmed.lastIndexOf("}");
 
   if (firstBrace >= 0 && lastBrace > firstBrace) {
-    candidates.push(text.slice(firstBrace, lastBrace + 1));
+    candidates.push(trimmed.slice(firstBrace, lastBrace + 1));
   }
 
   for (const candidate of candidates) {
@@ -193,58 +146,93 @@ function parseJsonObject(text: string): unknown | null {
   return null;
 }
 
-export async function reviewProjectWithAI(
-  context: GithubRepositoryContext,
-): Promise<AiReview> {
-  const { url, model, think } = getOllamaConfig();
+function assertReview(value: unknown): AiReview {
+  if (!value || typeof value !== "object") {
+    throw new Error("La réponse IA n'est pas un objet JSON.");
+  }
 
-  const instructions = [
-    "Tu es l'analyste technique de Project OS.",
-    "",
-    "Ta mission est de comprendre un dépôt GitHub pour un développeur solo, puis de produire une analyse fondée sur des preuves présentes dans les données fournies.",
-    "",
-    "Hiérarchie de confiance des sources :",
-    "1. contenu réel des fichiers sélectionnés",
-    "2. README et documentation",
-    "3. structure du dépôt",
-    "4. package/configuration",
-    "5. historique GitHub",
-    "6. métadonnées du dépôt",
-    "7. données déjà stockées dans Project OS",
-    "",
-    "Règles impératives pour l'analyse :",
-    "- N'affirme jamais qu'une fonctionnalité existe uniquement parce que son nom est suggéré par un dossier, un commit ou une description.",
-    "- Chaque fonctionnalité observée doit citer au moins un fichier présent dans selected_files ou repository_tree.",
-    "- Ne confonds jamais l'état administratif de Project OS avec l'état réel du projet.",
-    "- inferred_state est ton estimation de l'état réel du projet. Le current_state fourni par Project OS est seulement un indice historique.",
-    "- state_evidence doit citer les éléments qui justifient inferred_state.",
-    "- technologies doit contenir uniquement les technologies réellement observables ou très solidement déduites.",
-    "- purpose décrit le but probable du projet à partir des preuves disponibles.",
-    "- observed_features doit lister 2 à 8 fonctionnalités ou sous-systèmes réellement observables quand c'est possible.",
-    "",
-    "Règles impératives pour les tâches :",
-    "- Tu n'es PAS chargé de remplir une roadmap. Tu peux proposer zéro tâche.",
-    "- Une absence de fonctionnalité n'est PAS un problème en soi.",
-    "- Avant de proposer une tâche, cherche explicitement dans les fichiers fournis si la fonctionnalité est déjà implémentée.",
-    "- Si les preuves montrent que la fonctionnalité existe déjà, ne propose pas de tâche pour simplement l'ajouter.",
-    "- Une tâche n'est autorisée que si tu peux identifier un problème concret : bug, fonctionnalité réellement incomplète, dette/refactor clairement justifié, trou de conception documenté, documentation manquante explicitement nécessaire, ou test justifié par un comportement critique/non couvert et réellement identifiable.",
-    "- Une tâche de type TEST n'est PAS justifiée simplement parce qu'aucun test n'a été vu.",
-    "- Une tâche de type DESIGN_GAP n'est PAS justifiée simplement parce qu'une fonctionnalité n'existe pas.",
-    "- Interdis les recommandations génériques du type 'ajouter des tests', 'améliorer les performances', 'mettre à jour les dépendances', 'ajouter des notifications' ou 'gérer les branches' sans problème concret observé.",
-    "- Pour chaque tâche, problem explique le problème réellement observé.",
-    "- Pour chaque tâche, reason explique pourquoi ce problème mérite une action maintenant.",
-    "- evidence doit citer au moins un fichier ou élément précis qui démontre le problème.",
-    "- Si tu n'as pas suffisamment de preuves pour une tâche, place le point dans uncertainties et ne crée pas de tâche.",
-    "- suggested_tasks contient au maximum 3 tâches. Il est préférable d'en produire 0 à 2 que d'inventer des améliorations.",
-    "- confidence est entre 0 et 1.",
-    "- Réponds strictement selon le JSON schema fourni.",
-    "",
-    "Contrainte importante :",
-    "Le fait qu'un dépôt soit privé ne signifie pas que les données sont inaccessibles. Analyse uniquement les données effectivement fournies par Project OS.",
-  ].join("\n");
+  const review = value as Partial<AiReview>;
 
-  const input = JSON.stringify(context);
+  if (
+    typeof review.summary !== "string" ||
+    typeof review.purpose !== "string" ||
+    typeof review.type !== "string" ||
+    !Array.isArray(review.technologies) ||
+    typeof review.inferred_state !== "string" ||
+    !Array.isArray(review.state_evidence) ||
+    !Array.isArray(review.observed_features) ||
+    !Array.isArray(review.uncertainties) ||
+    !Array.isArray(review.suggested_tasks) ||
+    typeof review.confidence !== "number" ||
+    review.confidence < 0 ||
+    review.confidence > 1
+  ) {
+    throw new Error("La réponse IA ne respecte pas la structure attendue.");
+  }
 
+  const suggestedTasks: AiSuggestedTask[] = review.suggested_tasks
+    .filter(
+      (task): task is AiSuggestedTask =>
+        !!task &&
+        typeof task === "object" &&
+        typeof task.title === "string" &&
+        typeof task.task_kind === "string" &&
+        typeof task.priority === "number" &&
+        typeof task.problem === "string" &&
+        typeof task.reason === "string" &&
+        Array.isArray(task.evidence) &&
+        typeof task.confidence === "number" &&
+        task.confidence >= 0 &&
+        task.confidence <= 1 &&
+        task.priority >= 1 &&
+        task.priority <= 5 &&
+        task.title.trim().length > 0 &&
+        task.problem.trim().length > 0 &&
+        task.reason.trim().length > 0 &&
+        task.evidence.length > 0,
+    )
+    .slice(0, 3);
+
+  const observedFeatures = review.observed_features
+    .filter(
+      (feature): feature is {
+        name: string;
+        description: string;
+        evidence: string[];
+      } =>
+        !!feature &&
+        typeof feature === "object" &&
+        typeof feature.name === "string" &&
+        typeof feature.description === "string" &&
+        Array.isArray(feature.evidence) &&
+        feature.name.trim().length > 0,
+    )
+    .slice(0, 8);
+
+  return {
+    summary: review.summary,
+    purpose: review.purpose,
+    type: review.type,
+    technologies: review.technologies.filter(
+      (item): item is string => typeof item === "string",
+    ),
+    inferred_state: review.inferred_state,
+    state_evidence: review.state_evidence.filter(
+      (item): item is string => typeof item === "string",
+    ),
+    observed_features: observedFeatures,
+    confidence: review.confidence,
+    uncertainties: review.uncertainties.filter(
+      (item): item is string => typeof item === "string",
+    ),
+    suggested_tasks: suggestedTasks,
+  };
+}
+
+async function callOllama(
+  url: string,
+  body: Record<string, unknown>,
+): Promise<OllamaChatResponse> {
   let response: Response;
 
   try {
@@ -253,99 +241,149 @@ export async function reviewProjectWithAI(
       headers: {
         "Content-Type": "application/json",
       },
-      body: JSON.stringify({
-        model,
-        stream: false,
-        think,
-        format: reviewSchema,
-        messages: [
-          {
-            role: "system",
-            content: instructions,
-          },
-          {
-            role: "user",
-            content:
-              "Analyse ce dépôt GitHub pour Project OS :\n\n" +
-              input,
-          },
-        ],
-        options: {
-          temperature: 0,
-        },
-      }),
+      body: JSON.stringify(body),
     });
   } catch {
     throw new Error(
       "Impossible de joindre Ollama sur " +
         url +
-        ". Vérifie qu'Ollama est lancé et que le modèle \"" +
-        model +
-        "\" est installé.",
+        ". Vérifie qu'Ollama est lancé et que le modèle est installé.",
     );
   }
 
   if (!response.ok) {
-    const body = await response.text();
+    const errorBody = await response.text();
 
     throw new Error(
       "Ollama API " +
         response.status +
         " : " +
-        body.slice(0, 500),
+        errorBody.slice(0, 500),
     );
   }
 
-  const data =
-    (await response.json()) as OllamaChatResponse;
+  return (await response.json()) as OllamaChatResponse;
+}
 
-  const content = data.message?.content?.trim() ?? "";
-  const thinking = data.message?.thinking?.trim() ?? "";
-  const outputText = content || thinking;
+async function requestStructuredReview(
+  url: string,
+  model: string,
+  think: OllamaThinkLevel,
+  input: string,
+  instructions: string,
+): Promise<OllamaChatResponse> {
+  return callOllama(url, {
+    model,
+    stream: false,
+    think,
+    format: "json",
+    messages: [
+      {
+        role: "system",
+        content: instructions,
+      },
+      {
+        role: "user",
+        content:
+          "Analyse ce dépôt GitHub pour Project OS.\n\n" +
+          input,
+      },
+    ],
+    options: {
+      temperature: 0,
+    },
+  });
+}
 
-  if (!outputText) {
+async function requestFallbackReview(
+  url: string,
+  model: string,
+  input: string,
+  instructions: string,
+): Promise<OllamaChatResponse> {
+  return callOllama(url, {
+    model,
+    stream: false,
+    think: false,
+    messages: [
+      {
+        role: "system",
+        content: instructions,
+      },
+      {
+        role: "user",
+        content:
+          "Réponds uniquement avec le JSON attendu. Analyse ce dépôt GitHub.\n\n" +
+          input,
+      },
+    ],
+    options: {
+      temperature: 0,
+    },
+  });
+}
+
+export async function reviewProjectWithAI(
+  context: GithubRepositoryContext,
+): Promise<AiReview> {
+  const { url, model, think } = getOllamaConfig();
+  const instructions = buildInstructions();
+  const input = JSON.stringify(context);
+
+  let data = await requestStructuredReview(
+    url,
+    model,
+    think,
+    input,
+    instructions,
+  );
+
+  let content = data.message?.content?.trim() ?? "";
+
+  if (!content) {
+    const thinking = data.message?.thinking?.trim() ?? "";
+
+    if (thinking) {
+      const thinkingJson = parseJsonObject(thinking);
+
+      if (thinkingJson) {
+        try {
+          return assertReview(thinkingJson);
+        } catch {
+          // Continue to the fallback request.
+        }
+      }
+    }
+
+    data = await requestFallbackReview(
+      url,
+      model,
+      input,
+      instructions,
+    );
+
+    content = data.message?.content?.trim() ?? "";
+  }
+
+  if (!content) {
     const reason = data.done_reason
       ? " (done_reason: " + data.done_reason + ")"
       : "";
 
     throw new Error(
-      "Ollama n'a renvoyé ni contenu ni sortie de réflexion" +
+      "Ollama n'a renvoyé aucun contenu exploitable" +
         reason +
         ".",
     );
   }
 
-  const parsedValue = parseJsonObject(outputText);
+  const parsed = parseJsonObject(content);
 
-  if (!parsedValue) {
+  if (!parsed) {
     throw new Error(
-      "Ollama a répondu sans JSON exploitable" +
-        (content
-          ? "."
-          : " dans le champ content et a placé une sortie dans thinking.") +
-        " Vérifie la version d'Ollama et le modèle utilisés.",
+      "Ollama a répondu sans JSON exploitable.",
     );
   }
 
-  try {
-    const parsed = parsedValue as AiReview;
-
-    if (
-      typeof parsed.confidence !== "number" ||
-      parsed.confidence < 0 ||
-      parsed.confidence > 1
-    ) {
-      throw new Error("confidence invalide");
-    }
-
-    parsed.suggested_tasks = validateSuggestedTasks(
-      parsed.suggested_tasks,
-    );
-
-    return parsed;
-  } catch {
-    throw new Error(
-      "Ollama a répondu avec un JSON invalide ou incohérent.",
-    );
-  }
+  return assertReview(parsed);
 }
