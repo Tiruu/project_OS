@@ -224,7 +224,17 @@ export const projectAiReviewCommand = {
                 "** — " +
                 feature.description +
                 (feature.evidence.length > 0
-                  ? " [" + feature.evidence.slice(0, 2).join(", ") + "]"
+                  ? " [" +
+                    feature.evidence
+                      .slice(0, 2)
+                      .map(
+                        (item) =>
+                          item.kind +
+                          ": " +
+                          item.source,
+                      )
+                      .join(" | ") +
+                    "]"
                   : ""),
             )
           : ["Aucun identifié avec suffisamment de preuves."]),
@@ -252,7 +262,19 @@ export const projectAiReviewCommand = {
                 " — " +
                 task.reason +
                 " [preuve: " +
-                (task.evidence.slice(0, 2).join(", ") || "non précisée") +
+                (task.evidence.length > 0
+                  ? task.evidence
+                      .slice(0, 2)
+                      .map(
+                        (item) =>
+                          item.kind +
+                          ": " +
+                          item.source +
+                          " — " +
+                          item.claim,
+                      )
+                      .join(" | ")
+                  : "non précisée") +
                 " | confiance: " +
                 Math.round(task.confidence * 100) +
                 "%]",
