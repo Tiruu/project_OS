@@ -178,19 +178,17 @@ export async function getProjectAiContext(
           title: task.title,
           status: task.status,
         })),
-        decisions: decisions.map((decision) => ({
+        decisions: selectDecisions(decisions).map((decision) => ({
           id: decision.id,
           title: decision.title,
           status: decision.status,
         })),
-        activities: activities
-          .filter((activity) => activity.type !== "AI_REVIEW")
-          .map((activity) => ({
-            id: activity.id,
-            title: activity.title,
-            type: activity.type,
-            source: activity.source,
-          })),
+        activities: selectRecentActivities(activities).map((activity) => ({
+          id: activity.id,
+          title: activity.title,
+          type: activity.type,
+          source: activity.source,
+        })),
       },
     },
   };
