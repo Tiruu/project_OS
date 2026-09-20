@@ -893,6 +893,66 @@ const AI_REVIEW_JSON_SCHEMA = {
   },
 } as const;
 
+async function callGemini(
+  apiKey: string,
+  model: string,
+  thinkingLevel: "minimal" | "low" | "medium" | "high",
+  input: string,
+  instructions: string,
+): Promise<GeminiInteractionResponse> {
+  const url =
+    "https://generativelanguage.googleapis.com/v1beta/interactions";
+
+  let response: Response;
+
+  try {
+    response = await fetch(url, {
+      method: "POST",
+      headers: {
+        "Content-Type": "application/json",
+        "x-goog-api-key": apiKey,
+      },
+      body: JSON.stringify({
+        model,
+        input,
+        system_instruction: instructions,
+        response_format: {
+          type: "text",
+          mime_type: "application/json",
+          schema: AI_REVIEW_JSON_SCHEMA,
+        },
+        generation_config: {
+          thinking_level: thinkingLevel,
+        },
+        store: false,
+      }),
+    });
+  } catch {
+    throw new Error(
+      "Impossible de joindre l'API Gemini Interactions. Vérifie ta connexion et ta clé GEMINI_API_KEY.",
+    );
+  }
+
+  if (!response.ok) {
+    const errorBody = await response.text();
+
+    if (response.status === 503) {
+      throw new Error(
+        "GEMINI_SERVICE_UNAVAILABLE:" + errorBody.slice(0, 500),
+      );
+    }
+
+    throw new Error(
+      "Gemini API " +
+        response.status +
+        " : " +
+        errorBody.slice(0, 500),
+    );
+  }
+
+  return (await response.json()) as GeminiInteractionResponse;
+}
+
 async function sleep(ms: number): Promise<void> {
   await new Promise((resolve) => setTimeout(resolve, ms));
 }
