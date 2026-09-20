@@ -294,6 +294,116 @@ function scoreContextFile(path: string): {
   return { score, reason };
 }
 
+function isHistoricalDocumentationPath(path: string): boolean {
+  const fileName = path.toLowerCase().split("/").at(-1) ?? "";
+
+  return (
+    fileName.includes("journal") ||
+    fileName.includes("roadmap") ||
+    fileName.includes("changelog")
+  );
+}
+
+function selectFocusedContent(
+  content: string,
+  path: string,
+  focusText: string | null,
+  maxChars: number,
+): string {
+  if (content.length <= maxChars) {
+    return content;
+  }
+
+  const isMarkdown = getExtension(path) === ".md";
+  const isHistoricalDoc = isHistoricalDocumentationPath(path);
+
+  if (isMarkdown && isHistoricalDoc && !focusText?.trim()) {
+    const headChars = Math.floor(maxChars * 0.35);
+    const tailChars = maxChars - headChars;
+
+    return (
+      content.slice(0, headChars) +
+      "\n\n[... partie historique intermédiaire omise ...]\n\n" +
+      content.slice(-tailChars)
+    );
+  }
+
+  if (focusText?.trim()) {
+    const normalizedFocus = focusText
+      .toLowerCase()
+      .normalize("NFD")
+      .replace(/[\\u0300-\\u036f]/g, "")
+      .replace(/[^a-z0-9_./-]+/g, " ")
+      .trim();
+
+    const focusTokens = normalizedFocus
+      .split(/\s+/)
+      .filter((token) => token.length >= 5)
+      .slice(0, 12);
+
+    if (focusTokens.length > 0) {
+      const lines = content.split("\n");
+      const matchedLineIndexes: number[] = [];
+
+      for (let index = 0; index < lines.length; index += 1) {
+        const normalizedLine = lines[index]
+          .toLowerCase()
+          .normalize("NFD")
+          .replace(/[\\u0300-\\u036f]/g, "");
+
+        const matched = focusTokens.some((token) =>
+          normalizedLine.includes(token),
+        );
+
+        if (matched) {
+          matchedLineIndexes.push(index);
+        }
+      }
+
+      if (matchedLineIndexes.length > 0) {
+        const windows: Array<{ start: number; end: number }> = [];
+        const maxWindows = 4;
+        const radius = isMarkdown ? 28 : 45;
+
+        for (const index of matchedLineIndexes) {
+          const start = Math.max(0, index - radius);
+          const end = Math.min(lines.length, index + radius + 1);
+
+          const overlaps = windows.some(
+            (window) =>
+              start <= window.end &&
+              end >= window.start,
+          );
+
+          if (!overlaps) {
+            windows.push({ start, end });
+
+            if (windows.length >= maxWindows) {
+              break;
+            }
+          }
+        }
+
+        let focused = windows
+          .map(
+            (window) =>
+              lines.slice(window.start, window.end).join("\n"),
+          )
+          .join("\n\n[... extrait suivant ...]\n\n");
+
+        if (focused.length <= maxChars) {
+          return focused;
+        }
+
+        focused = focused.slice(0, maxChars);
+        return focused;
+      }
+    }
+  }
+
+  return content.slice(0, maxChars);
+}
+
 function selectContextFiles(
   tree: GithubTreeEntry[],
   readmePath: string | null,
@@ -321,6 +431,7 @@ function selectContextFiles(
 export async function getGithubRepositoryContext(
   owner: string,
   repository: string,
+  focusText: string | null = null,
 ): Promise<GithubRepositoryContext> {
   const repositoryUrl =
     "https://api.github.com/repos/" +
@@ -432,12 +543,16 @@ export async function getGithubRepositoryContext(
       continue;
     }
 
-    const content = decodeGithubContent(file).slice(
-      0,
-      Math.min(
-        MAX_FILE_CHARS,
-        MAX_TOTAL_FILE_CHARS - totalChars,
-      ),
+    const availableChars = Math.min(
+      MAX_FILE_CHARS,
+      MAX_TOTAL_FILE_CHARS - totalChars,
+    );
+
+    const content = selectFocusedContent(
+      decodeGithubContent(file),
+      selected.path,
+      focusText,
+      availableChars,
     );
 
     if (!content.trim()) {
