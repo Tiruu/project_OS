@@ -198,7 +198,7 @@ async function getRequiredGithubFile<T>(
       "Impossible de lire " +
         label +
         " depuis GitHub. " +
-        message +
+        message
     );
   }
 }
