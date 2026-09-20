@@ -656,6 +656,7 @@ async function requestFallbackReview(
     model,
     stream: false,
     think: false,
+    format: "json",
     messages: [
       {
         role: "system",
@@ -674,6 +675,27 @@ async function requestFallbackReview(
   });
 }
 
+function tryParseAiReview(
+  content: string,
+  context: ProjectAiContext,
+): AiReview | null {
+  if (!content.trim()) {
+    return null;
+  }
+
+  const parsed = parseJsonObject(content);
+
+  if (!parsed) {
+    return null;
+  }
+
+  try {
+    return decorateReviewEvidence(assertRawReview(parsed), context);
+  } catch {
+    return null;
+  }
+}
+
 export async function reviewProjectWithAI(
   context: ProjectAiContext,
 ): Promise<AiReview> {
@@ -681,7 +703,7 @@ export async function reviewProjectWithAI(
   const instructions = buildInstructions();
   const input = JSON.stringify(context);
 
-  let data = await requestStructuredReview(
+  const firstResponse = await requestStructuredReview(
     url,
     model,
     think,
@@ -689,53 +711,55 @@ export async function reviewProjectWithAI(
     instructions,
   );
 
-  let content = data.message?.content?.trim() ?? "";
+  const firstContent = firstResponse.message?.content?.trim() ?? "";
+  const firstReview = tryParseAiReview(firstContent, context);
 
-  if (!content) {
-    const thinking = data.message?.thinking?.trim() ?? "";
-
-    if (thinking) {
-      const thinkingJson = parseJsonObject(thinking);
-
-      if (thinkingJson) {
-        try {
-          const rawReview = assertRawReview(thinkingJson);
-          return decorateReviewEvidence(rawReview, context);
-        } catch {
-          // Continue to the fallback request.
-        }
-      }
-    }
-
-    data = await requestFallbackReview(
-      url,
-      model,
-      input,
-      instructions,
-    );
-
-    content = data.message?.content?.trim() ?? "";
+  if (firstReview) {
+    return firstReview;
   }
 
-  if (!content) {
-    const reason = data.done_reason
-      ? " (done_reason: " + data.done_reason + ")"
+  const thinking = firstResponse.message?.thinking?.trim() ?? "";
+
+  if (thinking) {
+    const thinkingReview = tryParseAiReview(thinking, context);
+
+    if (thinkingReview) {
+      return thinkingReview;
+    }
+  }
+
+  const fallbackResponse = await requestFallbackReview(
+    url,
+    model,
+    input,
+    [
+      instructions,
+      "",
+      "Mode de secours : produis un JSON compact et strict.",
+      "N'ajoute aucune explication, aucun markdown et aucune réflexion dans la réponse.",
+      "Limite les observed_features à 5, les contradictions à 3 et les suggested_tasks à 2.",
+      "Les champs evidence doivent rester courts et précis.",
+    ].join("\n"),
+  );
+
+  const fallbackContent = fallbackResponse.message?.content?.trim() ?? "";
+  const fallbackReview = tryParseAiReview(
+    fallbackContent,
+    context,
+  );
+
+  if (fallbackReview) {
+    return fallbackReview;
+  }
+
+  const reason =
+    fallbackResponse.done_reason
+      ? " (done_reason: " + fallbackResponse.done_reason + ")"
       : "";
 
-    throw new Error(
-      "Ollama n'a renvoyé aucun contenu exploitable" +
-        reason +
-        ".",
-    );
-  }
-
-  const parsed = parseJsonObject(content);
-
-  if (!parsed) {
-    throw new Error(
-      "Ollama a répondu sans JSON exploitable.",
-    );
-  }
-
-  return decorateReviewEvidence(assertRawReview(parsed), context);
+  throw new Error(
+    "Ollama a répondu sans JSON exploitable" +
+      reason +
+      ". Le modèle a peut-être tronqué ou mal structuré sa réponse.",
+  );
 }
