@@ -64,7 +64,11 @@ export const projectAiReviewCommand = {
       context.recent_activity = activities
         .filter((activity) => activity.source === "GITHUB")
         .slice(0, 10)
-        .map((activity) => activity.title);
+        .map((activity) =>
+          activity.description
+            ? activity.title + " — " + activity.description
+            : activity.title,
+        );
 
       const review = await reviewProjectWithAI(context);
 
@@ -72,14 +76,16 @@ export const projectAiReviewCommand = {
         project_id: project.id,
         type: "AI_REVIEW",
         source: "BOT",
-        title: `Analyse IA : ${project.name}`,
+        title: "Analyse IA : " + project.name,
         description: review.summary,
         metadata: {
           summary: review.summary,
           purpose: review.purpose,
           type: review.type,
           technologies: review.technologies,
-          current_state: review.current_state,
+          inferred_state: review.inferred_state,
+          state_evidence: review.state_evidence,
+          observed_features: review.observed_features,
           confidence: review.confidence,
           uncertainties: review.uncertainties,
           suggested_tasks: review.suggested_tasks,
@@ -87,7 +93,7 @@ export const projectAiReviewCommand = {
       });
 
       const lines = [
-        `**Analyse IA : ${project.name}**`,
+        "**Analyse IA : " + project.name + "**",
         "",
         "**Résumé**",
         review.summary,
@@ -101,22 +107,55 @@ export const projectAiReviewCommand = {
         "**Technologies**",
         review.technologies.join(", ") || "Aucune",
         "",
-        "**État estimé**",
-        review.current_state,
+        "**État réel estimé**",
+        review.inferred_state,
+        ...(review.state_evidence.length > 0
+          ? [
+              "",
+              "**Preuves de l'état**",
+              ...review.state_evidence
+                .slice(0, 5)
+                .map((item) => "• " + item),
+            ]
+          : []),
         "",
-        "**Confiance**",
-        `${Math.round(review.confidence * 100)}%`,
+        "**Fonctionnalités / sous-systèmes observés**",
+        ...(review.observed_features.length > 0
+          ? review.observed_features.slice(0, 8).map(
+              (feature) =>
+                "• **" +
+                feature.name +
+                "** — " +
+                feature.description +
+                (feature.evidence.length > 0
+                  ? " [" + feature.evidence.slice(0, 2).join(", ") + "]"
+                  : ""),
+            )
+          : ["Aucun identifié avec suffisamment de preuves."]),
+        "",
+        "**Confiance globale**",
+        Math.round(review.confidence * 100) + "%",
         "",
         "**Incertitudes**",
         ...(review.uncertainties.length > 0
-          ? review.uncertainties.map((item) => `• ${item}`)
+          ? review.uncertainties.map((item) => "• " + item)
           : ["Aucune"]),
         "",
         "**Tâches proposées**",
         ...(review.suggested_tasks.length > 0
           ? review.suggested_tasks.map(
               (task) =>
-                `• ${task.title} — priorité ${task.priority} — ${task.reason}`,
+                "• **" +
+                task.title +
+                "** — priorité " +
+                task.priority +
+                " — " +
+                task.reason +
+                " [preuve: " +
+                (task.evidence.slice(0, 2).join(", ") || "non précisée") +
+                " | confiance: " +
+                Math.round(task.confidence * 100) +
+                "%]",
             )
           : ["Aucune"]),
         "",
@@ -129,7 +168,7 @@ export const projectAiReviewCommand = {
 
       await interaction.editReply(
         error instanceof Error
-          ? `Analyse IA impossible : ${error.message}`
+          ? "Analyse IA impossible : " + error.message
           : "Analyse IA impossible.",
       );
     }
