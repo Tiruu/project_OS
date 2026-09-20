@@ -1,5 +1,6 @@
 import { getActivities } from "./activityService.js";
 import { getDecisions } from "./decisionService.js";
+import { getGithubRepositories } from "./githubRepositoryService.js";
 import { getProject } from "./projectService.js";
 import { getTasks } from "./taskService.js";
 
@@ -8,12 +9,14 @@ import type { ProjectDashboard } from "../types/dashboard.js";
 export async function getProjectDashboard(
   projectId: string,
 ): Promise<ProjectDashboard> {
-  const [project, tasks, activities, decisions] = await Promise.all([
-    getProject(projectId),
-    getTasks(projectId),
-    getActivities(projectId),
-    getDecisions(projectId),
-  ]);
+  const [project, tasks, activities, decisions, githubRepositories] =
+    await Promise.all([
+      getProject(projectId),
+      getTasks(projectId),
+      getActivities(projectId),
+      getDecisions(projectId),
+      getGithubRepositories(projectId),
+    ]);
 
   return {
     project,
@@ -25,5 +28,6 @@ export async function getProjectDashboard(
     activeDecisions: decisions.filter(
       (decision) => decision.status === "ACTIVE",
     ),
+    githubRepositories,
   };
 }
