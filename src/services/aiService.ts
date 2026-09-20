@@ -1486,78 +1486,78 @@ async function reviewProjectWithOllama(
   );
 }
 
-export async function askProjectWithAI(
-  context: ProjectAiContext,
-  question: string,
+function isDevelopmentPlanningQuestion(question: string): boolean {
+  const text = question.toLowerCase();
+
+  return [
+    "suite du développement",
+    "suite du developpement",
+    "prochaine modification",
+    "prochaine tâche",
+    "prochaine tache",
+    "prochaine fonctionnalité",
+    "prochaine fonctionnalite",
+    "quoi faire ensuite",
+    "que faire ensuite",
+    "quelle modification",
+    "next step",
+    "next task",
+    "next feature",
+  ].some((phrase) => text.includes(phrase));
+}
+
+function isFeatureIdeationQuestion(question: string): boolean {
+  const text = question.toLowerCase();
+
+  return [
+    "quelle fonctionnalité ajouter",
+    "quelle fonctionnalite ajouter",
+    "quelle feature ajouter",
+    "quelle fonctionnalité développer",
+    "quelle fonctionnalite developper",
+    "donne-moi une bonne fonctionnalité",
+    "donne moi une bonne fonctionnalité",
+    "donne-moi une bonne fonctionnalite",
+    "donne moi une bonne fonctionnalite",
+    "propose une fonctionnalité",
+    "propose une fonctionnalite",
+  ].some((phrase) => text.includes(phrase));
+}
+
+function isStructuredPlanningAnswer(
+  answer: string,
+  featureMode: boolean,
+): boolean {
+  const normalized = answer.toLowerCase();
+
+  if (featureMode) {
+    return (
+      normalized.includes("fonctionnalité") &&
+      normalized.includes("pourquoi") &&
+      normalized.includes("ce qu'elle permet") &&
+      normalized.includes("preuves") &&
+      normalized.includes("complexité")
+    );
+  }
+
+  return (
+    normalized.includes("modification proposée") &&
+    normalized.includes("pourquoi maintenant") &&
+    normalized.includes("fichiers concernés") &&
+    normalized.includes("résultat attendu") &&
+    normalized.includes("critère de réussite")
+  );
+}
+
+async function requestProjectAskText(
+  input: string,
+  instructions: string,
 ): Promise<string> {
-  const input = JSON.stringify({
-    question,
-    project_os: context.project_os,
-    repository: context.repository,
-    repository_tree: context.repository_tree.slice(0, 120),
-    selected_files: context.selected_files.map((file) => ({
-      path: file.path,
-      reason: file.reason,
-      content: file.content,
-    })),
-    readme: context.readme,
-    package_json: context.package_json,
-  });
-
-  const instructions = [
-    "Tu es l'assistant de contexte de Project OS.",
-    "Réponds en français, directement et de façon exploitable à la question.",
-    "Réponds d'abord à la question posée. N'ouvre pas par un résumé générique du projet, de son moteur, de sa configuration ou de son architecture sauf si la question le demande explicitement.",
-    "Ne produis pas une réponse à une question précédente, à un exemple cité ou à un contenu historique présent dans le contexte. La question courante fournie dans le champ 'question' est l'objectif unique de cette réponse.",
-    "Quand la question demande 'la suite du développement', 'la prochaine modification', 'quoi faire ensuite' ou une formulation équivalente, donne UNE prochaine modification concrète du projet. Ne renvoie pas simplement un état des lieux.",
-    "Pour une question de suite du développement, utilise en priorité les tâches actives, décisions actives, état Project OS, activité récente et code gameplay pertinent. La configuration du moteur ou le manifeste du projet ne doit être mentionné que s'il influence directement la prochaine modification.",
-    "Quand aucune tâche active ne justifie clairement la suite, formule une proposition à partir d'une lacune ou d'une extension observable dans le code actuel. Donne : Modification proposée, Pourquoi maintenant, Fichiers concernés, Résultat attendu, Critère de réussite.",
-    "Ne propose pas plusieurs branches de roadmap en même temps. Une réponse utile doit permettre au développeur de décider immédiatement quoi modifier ensuite.",
-    "Utilise uniquement les éléments présents dans le contexte fourni.",
-    "Distingue les faits observés des déductions.",
-    "Ne prétends pas avoir exécuté le projet si le contexte ne le démontre pas.",
-    "Quand une information manque, dis précisément ce qui n'est pas déterminable à partir du contexte fourni.",
-    "Donne des références de fichiers quand elles sont disponibles.",
-    "",
-    "Hiérarchie des preuves pour le code :",
-    "1. Le contenu actuel d'un fichier GitHub sélectionné est la source de vérité pour ce que ce fichier implémente.",
-    "2. Les données Project OS courantes décrivent l'état enregistré du projet, mais ne prouvent pas le comportement du code.",
-    "3. Dans Project OS, seules les décisions présentes dans active_decisions sont des décisions actuelles. Une décision supprimée ou absente n'existe plus comme contrainte courante.",
-    "4. Les tâches présentes dans active_tasks sont les tâches courantes. Une tâche DONE est historique et ne doit pas être présentée comme un travail encore à faire.",
-    "5. Les activités AI_REVIEW, AI_TASK_CREATED et AI_TASK_IGNORED sont historiques et ne doivent jamais être utilisées comme preuve d'une décision actuelle, d'une contrainte actuelle ou de l'état actuel du code.",
-    "6. Le journal, README et autres documents peuvent contenir de l'historique ou des descriptions obsolètes ; ils ne remplacent jamais le code actuel.",
-    "7. Une affirmation documentaire disant qu'une fonction existe, qu'une ligne contient un appel ou qu'un comportement est actuel doit être vérifiée dans le contenu du fichier concerné avant d'être présentée comme un fait.",
-    "8. N'invente jamais une ligne, une fonction, une décision actuelle ou une référence de fichier à partir d'un document qui la mentionne.",
-    "",
-    "Quand plusieurs sources divergent, explique la divergence et donne priorité au code actuel pour décrire le comportement réellement présent. Le document peut alors servir à expliquer l'historique ou à signaler une documentation obsolète.",
-    "Ne traite pas une refactorisation de responsabilité entre fichiers comme une contradiction tant que le comportement recherché existe ailleurs dans le code actuel.",
-    "Pour analyser une fonctionnalité ou une lacune, suis les appels entre fichiers jusqu'à la responsabilité qui implémente réellement le comportement. Si un fichier appelle une fonction située dans un autre fichier, cite le second fichier pour prouver l'implémentation et le premier uniquement pour le flux ou le déclenchement.",
-    "Ne considère jamais le fichier qui orchestre un flux comme le propriétaire d'un comportement simplement parce qu'il contient un signal, un bouton, un appel ou une connexion.",
-    "Quand tu affirmes qu'un comportement n'existe pas, vérifie d'abord les définitions, fonctions appelées et services directement responsables visibles dans le contexte. Si cette vérification n'est pas possible, formule la conclusion comme indéterminée et non comme une absence certaine.",
-    "Pour chaque proposition, fais mentalement ce contrôle avant de répondre : quel fichier déclenche le comportement, quel fichier l'implémente réellement, et quelle preuve exacte montre ce qui manque ?",
-    "",
-    "Pour une question du type 'quelle pourrait être la prochaine tâche', examine d'abord les tâches TODO/IN_PROGRESS, les décisions actives, l'état produit, les activités récentes et le code actuel pertinent pour la question.",
-    "Pour une question d'idéation comme 'quelle fonctionnalité ajouter', 'quelle feature développer' ou 'donne-moi une bonne fonctionnalité', tu es autorisé à proposer une fonctionnalité nouvelle même si aucune tâche existante ne la demande.",
-    "Dans ce mode idéation, pars d'abord des capacités réellement observées dans le code actuel, puis identifie une extension qui apporte une capacité claire et cohérente au produit.",
-    "Ne propose pas une fonctionnalité déjà présente sous un autre nom. Vérifie d'abord les fichiers pertinents et les services existants.",
-    "N'invente pas l'existence d'un besoin utilisateur non observé. Présente plutôt la valeur potentielle de la fonctionnalité et le problème qu'elle pourrait résoudre dans le workflow visible.",
-    "Ne réintroduis jamais une ancienne fonctionnalité uniquement parce qu'une ancienne AI_REVIEW ou un ancien document la mentionne.",
-    "Ne traite jamais l'état Project OS 'Importé depuis GitHub' comme une preuve que le produit est en phase d'importation ou de copie locale. C'est un état administratif de synchronisation, pas une mesure de maturité du projet.",
-    "Ne déclare jamais qu'un produit est 'complet' ou qu'il ne peut plus recevoir de fonctionnalité simplement parce que sa liste de commandes ou de fichiers est fournie.",
-    "Quand la question porte sur une fonctionnalité à ajouter, recommande UNE fonctionnalité principale, puis donne : Fonctionnalité, Pourquoi elle s'intègre au produit, Ce qu'elle permettrait de faire, Preuves dans le code actuel, Complexité estimée.",
-    "Dans 'Preuves dans le code actuel', indique d'abord la responsabilité réellement concernée (fichier + fonction si visible), puis le flux qui y mène. Ne cite pas un fichier d'orchestration comme preuve de l'absence ou de l'existence d'un comportement si une autre fonction porte réellement cette responsabilité.",
-    "Pour une proposition de tâche, évite les formulations vagues comme 'améliorer le game feel'. Transforme l'idée en problème concret et testable, avec un objectif observable et des limites explicites sur ce qui ne doit pas être modifié.",
-    "Une bonne tâche doit pouvoir être reformulée en résultat vérifiable : déclencheur ou point d'entrée, comportement attendu, cas concernés et critère de réussite. N'ajoute pas de détails d'implémentation non établis par le contexte.",
-    "Quand une fonctionnalité proposée existe déjà partiellement dans le code ou la base, signale précisément ce qui existe déjà et ce qu'il resterait à compléter.",
-    "Pour une question de prochaine tâche opérationnelle, ne propose pas une tâche simplement parce qu'un ancien document décrit une autre architecture ou un ancien comportement.",
-    "Dans Preuves, distingue explicitement 'Code actuel', 'Project OS' et 'Documentation' quand plusieurs sources sont utilisées.",
-    "Si la question demande une idée de fonctionnalité, ne réponds pas qu'aucune tâche n'est justifiée simplement parce que TODO/IN_PROGRESS est vide.",
-  ].join("\n");
-
   const provider = getAiProvider();
 
   if (provider === "gemini") {
     const config = getGeminiConfig();
+
     try {
       const response = await callGemini(
         config.apiKey,
@@ -1566,29 +1566,32 @@ export async function askProjectWithAI(
         input,
         instructions,
       );
+
       const content = getGeminiContent(response);
       if (content) {
         return content;
       }
 
-      throw new Error(
-        "Gemini a répondu sans contenu texte exploitable.",
-      );
+      throw new Error("Gemini a répondu sans contenu texte exploitable.");
     } catch (error) {
-      if (error instanceof Error && error.message.startsWith("GEMINI_RATE_LIMIT")) {
+      if (
+        error instanceof Error &&
+        (
+          error.message.startsWith("GEMINI_RATE_LIMIT") ||
+          error.message.includes("sans contenu texte exploitable")
+        )
+      ) {
         const fallback = getOllamaConfig();
-        const response = await callOllama(
-          fallback.url,
-          {
-            model: fallback.model,
-            stream: false,
-            think: false,
-            messages: [
-              { role: "system", content: instructions },
-              { role: "user", content: input },
-            ],
-          },
-        );
+        const response = await callOllama(fallback.url, {
+          model: fallback.model,
+          stream: false,
+          think: false,
+          messages: [
+            { role: "system", content: instructions },
+            { role: "user", content: input },
+          ],
+        });
+
         const content = response.message?.content?.trim() ?? "";
         if (content) {
           return content;
@@ -1596,33 +1599,6 @@ export async function askProjectWithAI(
 
         throw new Error(
           "Le modèle de secours Ollama n'a renvoyé aucun contenu texte.",
-        );
-      }
-
-      if (
-        error instanceof Error &&
-        error.message.includes("sans contenu texte exploitable")
-      ) {
-        const fallback = getOllamaConfig();
-        const response = await callOllama(
-          fallback.url,
-          {
-            model: fallback.model,
-            stream: false,
-            think: false,
-            messages: [
-              { role: "system", content: instructions },
-              { role: "user", content: input },
-            ],
-          },
-        );
-        const content = response.message?.content?.trim() ?? "";
-        if (content) {
-          return content;
-        }
-
-        throw new Error(
-          "Gemini n'a renvoyé aucun texte et le modèle de secours Ollama n'en a pas renvoyé non plus.",
         );
       }
 
@@ -1634,14 +1610,13 @@ export async function askProjectWithAI(
   const response = await callOllama(config.url, {
     model: config.model,
     stream: false,
-    // /project-ask is a normal answer, not a reasoning stream.
-    // Keep thinking disabled so the answer is returned in message.content.
     think: false,
     messages: [
       { role: "system", content: instructions },
       { role: "user", content: input },
     ],
   });
+
   const content = response.message?.content?.trim() ?? "";
   if (content) {
     return content;
@@ -1650,6 +1625,126 @@ export async function askProjectWithAI(
   throw new Error(
     "Ollama n'a renvoyé aucun contenu texte pour /project-ask.",
   );
+}
+
+export async function askProjectWithAI(
+  context: ProjectAiContext,
+  question: string,
+): Promise<string> {
+  const planningMode = isDevelopmentPlanningQuestion(question);
+  const featureMode = isFeatureIdeationQuestion(question);
+
+  const input = JSON.stringify({
+    question,
+    project_os: context.project_os,
+    repository: context.repository,
+    repository_tree: context.repository_tree.slice(0, planningMode ? 100 : 120),
+    selected_files: context.selected_files.map((file) => ({
+      path: file.path,
+      reason: file.reason,
+      content: file.content,
+    })),
+    ...(planningMode
+      ? {}
+      : {
+          readme: context.readme,
+          package_json: context.package_json,
+        }),
+  });
+
+  const instructions = [
+    "Tu es l'assistant de contexte de Project OS.",
+    "Réponds en français, directement et de façon exploitable à la question.",
+    "La question actuelle est l'unique objectif de ta réponse.",
+    "Ne produis pas un résumé générique du projet sauf si la question demande explicitement un résumé.",
+    "Ne réponds pas à une question précédente et ne transforme pas le contexte fourni en rapport d'analyse autonome.",
+    "Utilise uniquement les éléments présents dans le contexte fourni.",
+    "Distingue les faits observés des déductions.",
+    "Ne prétends pas avoir exécuté le projet si le contexte ne le démontre pas.",
+    "Quand une information manque, dis précisément ce qui n'est pas déterminable à partir du contexte fourni.",
+    "Donne des références de fichiers quand elles sont disponibles.",
+    "",
+    "MODE DE LA QUESTION :",
+    planningMode
+      ? "La question demande une prochaine étape de développement. Tu dois proposer UNE modification concrète, pas un audit général."
+      : featureMode
+        ? "La question demande une idée de fonctionnalité. Tu dois proposer UNE fonctionnalité principale, pas un audit général."
+        : "Réponds directement à la demande sans imposer un format de roadmap.",
+    "",
+    "Hiérarchie des preuves pour le code :",
+    "1. Le contenu actuel d'un fichier GitHub sélectionné est la source de vérité pour ce que ce fichier implémente.",
+    "2. Les données Project OS courantes décrivent l'état enregistré du projet, mais ne prouvent pas le comportement du code.",
+    "3. Dans Project OS, seules les décisions présentes dans active_decisions sont des décisions actuelles.",
+    "4. Les tâches présentes dans active_tasks sont les tâches courantes. Une tâche DONE est historique.",
+    "5. Les activités AI_REVIEW, AI_TASK_CREATED et AI_TASK_IGNORED sont historiques et ne doivent jamais être utilisées comme preuve de l'état actuel du code.",
+    "6. Le journal, README et autres documents peuvent contenir de l'historique ou des descriptions obsolètes ; ils ne remplacent jamais le code actuel.",
+    "7. Une affirmation documentaire disant qu'une fonction existe ou qu'un comportement est actuel doit être vérifiée dans le contenu du fichier concerné.",
+    "8. N'invente jamais une ligne, une fonction, une décision actuelle ou une référence de fichier.",
+    "",
+    "Quand plusieurs sources divergent, donne priorité au code actuel pour décrire le comportement présent.",
+    "Pour analyser une fonctionnalité ou une lacune, suis les appels entre fichiers jusqu'à la responsabilité qui implémente réellement le comportement.",
+    "Ne considère jamais un fichier d'orchestration comme propriétaire d'un comportement simplement parce qu'il contient un bouton, un signal, un appel ou une connexion.",
+    "Quand tu affirmes qu'un comportement n'existe pas, vérifie d'abord les fonctions appelées et les services directement responsables visibles dans le contexte. Si cette vérification est impossible, formule la conclusion comme indéterminée.",
+    "",
+    ...(planningMode
+      ? [
+          "Pour la suite du développement, examine en priorité active_tasks, active_decisions, project.current_state, recent_activities et les fichiers de code gameplay pertinents.",
+          "Ne fais pas de project.godot, de configuration moteur ou de métadonnées de dépôt le sujet principal sauf si elles influencent directement la modification proposée.",
+          "Une fonctionnalité ou amélioration absente n'est pas automatiquement un problème : propose-la uniquement si elle constitue une suite cohérente à ce qui est déjà observable.",
+          "Propose UNE seule modification.",
+          "Format obligatoire :",
+          "Modification proposée :",
+          "Pourquoi maintenant :",
+          "Fichiers concernés :",
+          "Résultat attendu :",
+          "Critère de réussite :",
+          "La réponse doit pouvoir être transformée directement en tâche de développement.",
+          "Ne produis pas de section Game Overview, Core Mechanics, Player Experience Flow, Technical Strengths, Opportunities for Refinement ou équivalent.",
+        ]
+      : []),
+    ...(featureMode
+      ? [
+          "Dans ce mode idéation, pars d'abord des capacités réellement observées dans le code actuel.",
+          "Ne propose pas une fonctionnalité déjà présente sous un autre nom.",
+          "Ne réintroduis jamais une ancienne fonctionnalité uniquement parce qu'une ancienne AI_REVIEW ou un ancien document la mentionne.",
+          "Ne traite jamais l'état Project OS 'Importé depuis GitHub' comme une mesure de maturité.",
+          "Propose UNE seule fonctionnalité.",
+          "Format obligatoire :",
+          "Fonctionnalité :",
+          "Pourquoi elle s'intègre au produit :",
+          "Ce qu'elle permettrait de faire :",
+          "Preuves dans le code actuel :",
+          "Complexité estimée :",
+        ]
+      : []),
+    "",
+    "Pour toute proposition technique, indique la responsabilité réellement concernée (fichier + fonction si visible) et distingue le flux qui y mène de l'endroit qui implémente réellement le comportement.",
+    "Évite les formulations vagues comme 'améliorer le game feel'. Donne un objectif observable et un critère de réussite.",
+  ].join("\n");
+
+  let answer = await requestProjectAskText(input, instructions);
+
+  if (
+    (planningMode || featureMode) &&
+    !isStructuredPlanningAnswer(answer, featureMode)
+  ) {
+    const correctionInstructions = [
+      instructions,
+      "",
+      "CORRECTION OBLIGATOIRE :",
+      "Ta réponse précédente n'a pas répondu dans le format demandé.",
+      "Réécris entièrement la réponse.",
+      featureMode
+        ? "Donne uniquement UNE fonctionnalité et respecte exactement les cinq rubriques demandées."
+        : "Donne uniquement UNE prochaine modification et respecte exactement les cinq rubriques demandées.",
+      "Ne recommence pas par un résumé du jeu ou de son architecture.",
+      "Ne mentionne pas cette correction et ne commente pas ta réponse précédente.",
+    ].join("\n");
+
+    answer = await requestProjectAskText(input, correctionInstructions);
+  }
+
+  return answer;
 }
 
 export async function reviewProjectWithAI(
