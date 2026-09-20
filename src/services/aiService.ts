@@ -1,6 +1,8 @@
 import "dotenv/config";
 
 import type {
+  AiEvidence,
+  AiObservedFeature,
   AiReview,
   AiSuggestedTask,
 } from "../types/aiReview.js";
@@ -67,10 +69,19 @@ function buildInstructions(): string {
     "6. métadonnées",
     "7. données déjà stockées dans Project OS",
     "",
-    "Règles d'analyse :",
+    "Règles de preuve :",
+    "- DIRECT signifie que le fichier, texte ou élément cité a réellement été fourni dans les données.",
+    "- INDIRECT signifie que l'élément est déduit d'une preuve DIRECTE, mais que son contenu n'a pas été fourni.",
+    "- N'utilise jamais DIRECT pour un fichier dont tu n'as vu que le nom ou une référence.",
+    "- Pour une preuve INDIRECTE, explique clairement le lien logique avec la preuve DIRECTE.",
+    "- N'affirme jamais avoir lu le contenu d'un fichier uniquement parce qu'un autre fichier le référence.",
+    "- Une conclusion de qualité comme 'manque de modularité', 'manque de tests' ou 'architecture insuffisante' doit rester une incertitude sauf si le code fourni contient des éléments concrets qui la démontrent.",
+    "",
+    "Règles d'analyse :"
     "- Ne considère jamais un nom de fichier, un dossier ou un commit comme preuve suffisante qu'une fonctionnalité existe.",
     "- Chaque fonctionnalité observée doit citer un fichier concret.",
     "- inferred_state décrit l'état réel estimé du projet, pas l'état administratif 'Importé depuis GitHub'.",
+    "- Ne transforme pas l'absence de tests, de modularité ou d'une fonctionnalité en défaut sans preuve concrète."
     "- technologies contient uniquement les technologies observables ou très solidement déduites.",
     "- observed_features contient 2 à 8 sous-systèmes réellement observés quand c'est possible.",
     "",
@@ -90,6 +101,10 @@ function buildInstructions(): string {
     "- Réponds avec un objet JSON valide uniquement.",
     "- Aucun markdown, aucune phrase avant ou après le JSON.",
     "- Champs obligatoires : summary, purpose, type, technologies, inferred_state, state_evidence, observed_features, confidence, uncertainties, suggested_tasks.",
+    "- state_evidence et evidence sont des objets {kind, source, claim}.",
+    "- kind vaut uniquement DIRECT ou INDIRECT.",
+    "- source doit être une référence précise.",
+    "- claim doit expliquer précisément ce que la preuve démontre.",
     "- observed_features contient des objets {name, description, evidence}.",
     "- suggested_tasks contient des objets {title, task_kind, priority, problem, reason, evidence, confidence}.",
     "- confidence et les confiances de tâches sont entre 0 et 1.",
@@ -102,14 +117,14 @@ function buildInstructions(): string {
     '  "type": "string",',
     '  "technologies": ["string"],',
     '  "inferred_state": "string",',
-    '  "state_evidence": ["string"],',
+    '  "state_evidence": [{"kind": "DIRECT|INDIRECT", "source": "string", "claim": "string"}],',
     '  "observed_features": [',
-    '    {"name": "string", "description": "string", "evidence": ["string"]}',
+    '    {"name": "string", "description": "string", "evidence": [{"kind": "DIRECT|INDIRECT", "source": "string", "claim": "string"}]}',
     "  ],",
     '  "confidence": 0.0,',
     '  "uncertainties": ["string"],',
     '  "suggested_tasks": [',
-    '    {"title": "string", "task_kind": "BUG|INCOMPLETE|DESIGN_GAP|REFACTOR|DOCUMENTATION|TEST", "priority": 1, "problem": "string", "reason": "string", "evidence": ["string"], "confidence": 0.0}',
+    '    {"title": "string", "task_kind": "BUG|INCOMPLETE|DESIGN_GAP|REFACTOR|DOCUMENTATION|TEST", "priority": 1, "problem": "string", "reason": "string", "evidence": [{"kind": "DIRECT|INDIRECT", "source": "string", "claim": "string"}], "confidence": 0.0}',
     "  ]",
     "}",
   ].join("\n");
@@ -146,6 +161,141 @@ function parseJsonObject(text: string): unknown | null {
   return null;
 }
 
+const AI_EVIDENCE_KINDS = new Set(["DIRECT", "INDIRECT"]);
+const AI_TASK_KINDS = new Set([
+  "BUG",
+  "INCOMPLETE",
+  "DESIGN_GAP",
+  "REFACTOR",
+  "DOCUMENTATION",
+  "TEST",
+]);
+
+function parseEvidence(value: unknown): AiEvidence | null {
+  if (!value || typeof value !== "object") {
+    return null;
+  }
+
+  const evidence = value as Partial<AiEvidence>;
+
+  if (
+    typeof evidence.kind !== "string" ||
+    !AI_EVIDENCE_KINDS.has(evidence.kind) ||
+    typeof evidence.source !== "string" ||
+    typeof evidence.claim !== "string" ||
+    evidence.source.trim().length === 0 ||
+    evidence.claim.trim().length === 0
+  ) {
+    return null;
+  }
+
+  return {
+    kind: evidence.kind as AiEvidence["kind"],
+    source: evidence.source.trim(),
+    claim: evidence.claim.trim(),
+  };
+}
+
+function parseObservedFeatures(value: unknown): AiObservedFeature[] {
+  if (!Array.isArray(value)) {
+    return [];
+  }
+
+  return value
+    .map((item) => {
+      if (!item || typeof item !== "object") {
+        return null;
+      }
+
+      const feature = item as Partial<AiObservedFeature>;
+
+      if (
+        typeof feature.name !== "string" ||
+        typeof feature.description !== "string" ||
+        !Array.isArray(feature.evidence)
+      ) {
+        return null;
+      }
+
+      const evidence = feature.evidence
+        .map(parseEvidence)
+        .filter((item): item is AiEvidence => item !== null);
+
+      if (
+        feature.name.trim().length === 0 ||
+        feature.description.trim().length === 0 ||
+        evidence.length === 0
+      ) {
+        return null;
+      }
+
+      return {
+        name: feature.name.trim(),
+        description: feature.description.trim(),
+        evidence: evidence.slice(0, 4),
+      };
+    })
+    .filter((item): item is AiObservedFeature => item !== null)
+    .slice(0, 8);
+}
+
+function parseSuggestedTasks(value: unknown): AiSuggestedTask[] {
+  if (!Array.isArray(value)) {
+    return [];
+  }
+
+  return value
+    .map((item) => {
+      if (!item || typeof item !== "object") {
+        return null;
+      }
+
+      const task = item as Partial<AiSuggestedTask>;
+
+      if (
+        typeof task.title !== "string" ||
+        typeof task.task_kind !== "string" ||
+        typeof task.priority !== "number" ||
+        typeof task.problem !== "string" ||
+        typeof task.reason !== "string" ||
+        !Array.isArray(task.evidence) ||
+        typeof task.confidence !== "number"
+      ) {
+        return null;
+      }
+
+      const evidence = task.evidence
+        .map(parseEvidence)
+        .filter((item): item is AiEvidence => item !== null);
+
+      if (
+        !AI_TASK_KINDS.has(task.task_kind) ||
+        task.title.trim().length === 0 ||
+        task.problem.trim().length === 0 ||
+        task.reason.trim().length === 0 ||
+        task.priority < 1 ||
+        task.priority > 5 ||
+        task.confidence < 0 ||
+        task.confidence > 1 ||
+        evidence.length === 0
+      ) {
+        return null;
+      }
+
+      return {
+        title: task.title.trim(),
+        task_kind: task.task_kind as AiSuggestedTask["task_kind"],
+        priority: task.priority,
+        problem: task.problem.trim(),
+        reason: task.reason.trim(),
+        evidence: evidence.slice(0, 4),
+        confidence: task.confidence,
+      };
+    })
+    .filter((item): item is AiSuggestedTask => item !== null)
+    .slice(0, 3);
+}
+
 function assertReview(value: unknown): AiReview {
   if (!value || typeof value !== "object") {
     throw new Error("La réponse IA n'est pas un objet JSON.");
@@ -170,62 +320,27 @@ function assertReview(value: unknown): AiReview {
     throw new Error("La réponse IA ne respecte pas la structure attendue.");
   }
 
-  const suggestedTasks: AiSuggestedTask[] = review.suggested_tasks
-    .filter(
-      (task): task is AiSuggestedTask =>
-        !!task &&
-        typeof task === "object" &&
-        typeof task.title === "string" &&
-        typeof task.task_kind === "string" &&
-        typeof task.priority === "number" &&
-        typeof task.problem === "string" &&
-        typeof task.reason === "string" &&
-        Array.isArray(task.evidence) &&
-        typeof task.confidence === "number" &&
-        task.confidence >= 0 &&
-        task.confidence <= 1 &&
-        task.priority >= 1 &&
-        task.priority <= 5 &&
-        task.title.trim().length > 0 &&
-        task.problem.trim().length > 0 &&
-        task.reason.trim().length > 0 &&
-        task.evidence.length > 0,
-    )
-    .slice(0, 3);
-
-  const observedFeatures = review.observed_features
-    .filter(
-      (feature): feature is {
-        name: string;
-        description: string;
-        evidence: string[];
-      } =>
-        !!feature &&
-        typeof feature === "object" &&
-        typeof feature.name === "string" &&
-        typeof feature.description === "string" &&
-        Array.isArray(feature.evidence) &&
-        feature.name.trim().length > 0,
-    )
-    .slice(0, 8);
+  const stateEvidence = review.state_evidence
+    .map(parseEvidence)
+    .filter((item): item is AiEvidence => item !== null);
 
   return {
-    summary: review.summary,
-    purpose: review.purpose,
-    type: review.type,
+    summary: review.summary.trim(),
+    purpose: review.purpose.trim(),
+    type: review.type.trim(),
     technologies: review.technologies.filter(
-      (item): item is string => typeof item === "string",
+      (item): item is string =>
+        typeof item === "string" && item.trim().length > 0,
     ),
-    inferred_state: review.inferred_state,
-    state_evidence: review.state_evidence.filter(
-      (item): item is string => typeof item === "string",
-    ),
-    observed_features: observedFeatures,
+    inferred_state: review.inferred_state.trim(),
+    state_evidence: stateEvidence.slice(0, 6),
+    observed_features: parseObservedFeatures(review.observed_features),
     confidence: review.confidence,
     uncertainties: review.uncertainties.filter(
-      (item): item is string => typeof item === "string",
+      (item): item is string =>
+        typeof item === "string" && item.trim().length > 0,
     ),
-    suggested_tasks: suggestedTasks,
+    suggested_tasks: parseSuggestedTasks(review.suggested_tasks),
   };
 }
 
