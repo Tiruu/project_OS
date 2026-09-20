@@ -11,10 +11,13 @@ import { getGithubRepositoryContext } from "../../services/githubContextService.
 import { reviewProjectWithAI } from "../../services/aiService.js";
 
 const DISCORD_MAX_CONTENT_LENGTH = 2000;
+const AI_REVIEW_MARKER = "​‌‍";
+const AI_REVIEW_CHUNK_LENGTH =
+  DISCORD_MAX_CONTENT_LENGTH - AI_REVIEW_MARKER.length;
 
 function splitDiscordMessage(content: string): string[] {
-  if (content.length <= DISCORD_MAX_CONTENT_LENGTH) {
-    return [content];
+  if (content.length <= AI_REVIEW_CHUNK_LENGTH) {
+    return [AI_REVIEW_MARKER + content];
   }
 
   const chunks: string[] = [];
@@ -26,16 +29,16 @@ function splitDiscordMessage(content: string): string[] {
         ? line
         : current + "\n" + line;
 
-    if (candidate.length <= DISCORD_MAX_CONTENT_LENGTH) {
+    if (candidate.length <= AI_REVIEW_CHUNK_LENGTH) {
       current = candidate;
       continue;
     }
 
     if (current.length > 0) {
-      chunks.push(current);
+      chunks.push(AI_REVIEW_MARKER + current);
     }
 
-    if (line.length <= DISCORD_MAX_CONTENT_LENGTH) {
+    if (line.length <= AI_REVIEW_CHUNK_LENGTH) {
       current = line;
       continue;
     }
@@ -43,13 +46,14 @@ function splitDiscordMessage(content: string): string[] {
     for (
       let offset = 0;
       offset < line.length;
-      offset += DISCORD_MAX_CONTENT_LENGTH
+      offset += AI_REVIEW_CHUNK_LENGTH
     ) {
       chunks.push(
-        line.slice(
-          offset,
-          offset + DISCORD_MAX_CONTENT_LENGTH,
-        ),
+        AI_REVIEW_MARKER +
+          line.slice(
+            offset,
+            offset + AI_REVIEW_CHUNK_LENGTH,
+          ),
       );
     }
 
@@ -57,10 +61,47 @@ function splitDiscordMessage(content: string): string[] {
   }
 
   if (current.length > 0) {
-    chunks.push(current);
+    chunks.push(AI_REVIEW_MARKER + current);
   }
 
   return chunks;
+}
+
+async function cleanupPreviousAiReviewMessages(
+  interaction: ChatInputCommandInteraction,
+): Promise<void> {
+  const channel = interaction.channel;
+
+  if (!channel || !("messages" in channel)) {
+    return;
+  }
+
+  const botId = interaction.client.user?.id;
+
+  if (!botId) {
+    return;
+  }
+
+  const messages = await channel.messages.fetch({ limit: 100 });
+
+  const previousMessages = messages.filter(
+    (message) =>
+      message.author.id === botId &&
+      message.content.includes(AI_REVIEW_MARKER),
+  );
+
+  await Promise.all(
+    previousMessages.map(async (message) => {
+      try {
+        await message.delete();
+      } catch (error) {
+        console.warn(
+          "Impossible de supprimer une ancienne analyse IA :",
+          error,
+        );
+      }
+    }),
+  );
 }
 
 export const projectAiReviewCommand = {
@@ -144,6 +185,8 @@ export const projectAiReviewCommand = {
           suggested_tasks: review.suggested_tasks,
         },
       });
+
+      await cleanupPreviousAiReviewMessages(interaction);
 
       const lines = [
         "**Analyse IA : " + project.name + "**",
