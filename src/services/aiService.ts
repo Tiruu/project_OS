@@ -25,6 +25,19 @@ type OllamaThinkLevel =
   | "high"
   | "max";
 
+type GeminiGenerateResponse = {
+  candidates?: Array<{
+    content?: {
+      parts?: Array<{
+        text?: string;
+      }>;
+    };
+  }>;
+};
+
+type AiProvider = "ollama" | "gemini";
+
+
 type RawAiObservedFeature = {
   name: string;
   description: string;
@@ -88,6 +101,43 @@ function getOllamaConfig(): {
       process.env.OLLAMA_MODEL?.trim() ||
       "qwen3.5:4b",
     think,
+  };
+}
+
+
+function getAiProvider(): AiProvider {
+  return process.env.AI_PROVIDER?.trim().toLowerCase() === "gemini"
+    ? "gemini"
+    : "ollama";
+}
+
+function getGeminiConfig(): {
+  apiKey: string;
+  model: string;
+  thinkingBudget: number;
+} {
+  const apiKey = process.env.GEMINI_API_KEY?.trim();
+
+  if (!apiKey) {
+    throw new Error(
+      "GEMINI_API_KEY est absent. Ajoute une clé Gemini dans ton .env.",
+    );
+  }
+
+  const rawThinkingBudget =
+    process.env.GEMINI_THINKING_BUDGET?.trim() || "0";
+  const parsedThinkingBudget = Number.parseInt(rawThinkingBudget, 10);
+  const thinkingBudget =
+    Number.isFinite(parsedThinkingBudget) && parsedThinkingBudget >= 0
+      ? Math.min(parsedThinkingBudget, 24576)
+      : 0;
+
+  return {
+    apiKey,
+    model:
+      process.env.GEMINI_MODEL?.trim() ||
+      "gemini-2.5-flash",
+    thinkingBudget,
   };
 }
 
@@ -749,7 +799,151 @@ function tryParseAiReview(
   }
 }
 
-export async function reviewProjectWithAI(
+async function callGemini(
+  apiKey: string,
+  model: string,
+  thinkingBudget: number,
+  input: string,
+  instructions: string,
+): Promise<GeminiGenerateResponse> {
+  const url =
+    "https://generativelanguage.googleapis.com/v1beta/models/" +
+    encodeURIComponent(model) +
+    ":generateContent";
+
+  let response: Response;
+
+  try {
+    response = await fetch(url, {
+      method: "POST",
+      headers: {
+        "Content-Type": "application/json",
+        "x-goog-api-key": apiKey,
+      },
+      body: JSON.stringify({
+        systemInstruction: {
+          parts: [{ text: instructions }],
+        },
+        contents: [
+          {
+            role: "user",
+            parts: [
+              {
+                text:
+                  "Analyse ce dépôt GitHub pour Project OS.\n\n" +
+                  input,
+              },
+            ],
+          },
+        ],
+        generationConfig: {
+          responseMimeType: "application/json",
+          thinkingConfig: {
+            thinkingBudget,
+          },
+        },
+      }),
+    });
+  } catch {
+    throw new Error(
+      "Impossible de joindre l'API Gemini. Vérifie ta connexion et ta clé GEMINI_API_KEY.",
+    );
+  }
+
+  if (!response.ok) {
+    const errorBody = await response.text();
+
+    throw new Error(
+      "Gemini API " +
+        response.status +
+        " : " +
+        errorBody.slice(0, 500),
+    );
+  }
+
+  return (await response.json()) as GeminiGenerateResponse;
+}
+
+function getGeminiContent(response: GeminiGenerateResponse): string {
+  return (
+    response.candidates?.[0]?.content?.parts
+      ?.map((part) => part.text?.trim() || "")
+      .filter(Boolean)
+      .join("\n")
+      .trim() || ""
+  );
+}
+
+async function requestGeminiReview(
+  apiKey: string,
+  model: string,
+  thinkingBudget: number,
+  input: string,
+  instructions: string,
+): Promise<GeminiGenerateResponse> {
+  return callGemini(
+    apiKey,
+    model,
+    thinkingBudget,
+    input,
+    instructions,
+  );
+}
+
+async function reviewProjectWithGemini(
+  context: ProjectAiContext,
+): Promise<AiReview> {
+  const { apiKey, model, thinkingBudget } = getGeminiConfig();
+  const instructions = buildInstructions();
+  const input = JSON.stringify(context);
+
+  const response = await requestGeminiReview(
+    apiKey,
+    model,
+    thinkingBudget,
+    input,
+    instructions,
+  );
+
+  const content = getGeminiContent(response);
+  const review = tryParseAiReview(content, context);
+
+  if (review) {
+    return review;
+  }
+
+  const compactInput = buildCompactAiInput(context);
+  const compactResponse = await requestGeminiReview(
+    apiKey,
+    model,
+    thinkingBudget,
+    compactInput,
+    [
+      instructions,
+      "",
+      "Mode de secours Gemini : produis un JSON compact et strict.",
+      "N'ajoute aucune explication, aucun markdown et aucune réflexion dans la réponse.",
+      "Limite les observed_features à 5, les contradictions à 3 et les suggested_tasks à 2.",
+      "Les champs evidence doivent rester courts et précis.",
+    ].join("\n"),
+  );
+
+  const compactContent = getGeminiContent(compactResponse);
+  const compactReview = tryParseAiReview(
+    compactContent,
+    context,
+  );
+
+  if (compactReview) {
+    return compactReview;
+  }
+
+  throw new Error(
+    "Gemini a répondu sans JSON exploitable. Les tentatives normale et compacte ont échoué.",
+  );
+}
+
+async function reviewProjectWithOllama(
   context: ProjectAiContext,
 ): Promise<AiReview> {
   const { url, model, think } = getOllamaConfig();
@@ -843,4 +1037,16 @@ export async function reviewProjectWithAI(
       reason +
       ". Les tentatives normale et compacte ont échoué.",
   );
+}
+
+export async function reviewProjectWithAI(
+  context: ProjectAiContext,
+): Promise<AiReview> {
+  const provider = getAiProvider();
+
+  if (provider === "gemini") {
+    return reviewProjectWithGemini(context);
+  }
+
+  return reviewProjectWithOllama(context);
 }
