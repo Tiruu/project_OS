@@ -3,8 +3,7 @@ import "dotenv/config";
 import { createActivity, getActivities } from "./activityService.js";
 import { getGithubRepositories } from "./githubRepositoryService.js";
 
-import type { Activity } from "../types/activity.js";
-import type { ActivityType } from "../types/activity.js";
+import type { Activity, ActivityType } from "../types/activity.js";
 import type { GithubRepository } from "../types/githubRepository.js";
 
 type GithubCommit = {
@@ -64,8 +63,9 @@ export async function syncGithubRepository(
   repository: GithubRepository,
 ): Promise<number> {
   const existingActivities = await getActivities(repository.project_id);
+  const repositoryKey = `${repository.owner}/${repository.repository}`;
 
-  const baseUrl = `https://api.github.com/repos/${repository.owner}/${repository.repository}`;
+  const baseUrl = `https://api.github.com/repos/${repositoryKey}`;
 
   const [commits, pullRequests] = await Promise.all([
     githubFetch<GithubCommit[]>(`${baseUrl}/commits?per_page=10`),
@@ -77,7 +77,7 @@ export async function syncGithubRepository(
   let created = 0;
 
   for (const commit of commits) {
-    const githubId = `commit:${commit.sha}`;
+    const githubId = `repo:${repositoryKey}:commit:${commit.sha}`;
 
     if (activityExists(existingActivities, githubId)) {
       continue;
@@ -98,7 +98,7 @@ export async function syncGithubRepository(
         github_id: githubId,
         sha: commit.sha,
         url: commit.html_url ?? null,
-        repository: `${repository.owner}/${repository.repository}`,
+        repository: repositoryKey,
       },
     });
 
@@ -120,7 +120,8 @@ export async function syncGithubRepository(
       ? pullRequest.merged_at
       : pullRequest.updated_at;
 
-    const githubId = `pr:${pullRequest.number}:${eventTimestamp}`;
+    const githubId =
+      `repo:${repositoryKey}:pr:${pullRequest.number}:${eventTimestamp}`;
 
     if (activityExists(existingActivities, githubId)) {
       continue;
@@ -137,7 +138,7 @@ export async function syncGithubRepository(
         url: pullRequest.html_url ?? null,
         state: pullRequest.state,
         merged_at: pullRequest.merged_at ?? null,
-        repository: `${repository.owner}/${repository.repository}`,
+        repository: repositoryKey,
       },
     });
 
@@ -149,6 +150,10 @@ export async function syncGithubRepository(
 
 export async function syncGithubProject(projectId: string): Promise<number> {
   const repositories = await getGithubRepositories(projectId);
+
+  if (repositories.length === 0) {
+    throw new Error("Aucun dépôt GitHub n'est connecté à ce projet.");
+  }
 
   let created = 0;
 
