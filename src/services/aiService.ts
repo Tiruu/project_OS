@@ -130,6 +130,65 @@ function buildInstructions(): string {
   ].join("\n");
 }
 
+function buildContextInput(context: GithubRepositoryContext): string {
+  const lines: string[] = [
+    "=== PROJECT OS CONTEXT START ===",
+    "",
+    "PROJECT METADATA",
+    "name: " + (context.project?.name ?? "unknown"),
+    "type: " + (context.project?.type ?? "unknown"),
+    "technologies: " + (context.project?.technologies.join(", ") || "unknown"),
+    "description: " + (context.project?.description ?? "unknown"),
+    "current_state: " + (context.project?.current_state ?? "unknown"),
+    "",
+    "GITHUB REPOSITORY METADATA",
+    "name: " + context.repository.name,
+    "full_name: " + context.repository.full_name,
+    "url: " + context.repository.url,
+    "description: " + (context.repository.description ?? "none"),
+    "default_branch: " + context.repository.default_branch,
+    "language: " + (context.repository.language ?? "none"),
+    "visibility: " + context.repository.visibility,
+    "",
+    "RECENT GITHUB ACTIVITY",
+    ...(context.recent_activity?.length
+      ? context.recent_activity.map((item) => "- " + item)
+      : ["none"]),
+    "",
+    "REPOSITORY TREE",
+    ...(context.repository_tree.length
+      ? context.repository_tree.map((item) => "- " + item)
+      : ["none"]),
+    "",
+    "README",
+    context.readme ?? "none",
+    "",
+    "PACKAGE.JSON",
+    context.package_json
+      ? JSON.stringify(context.package_json, null, 2)
+      : "none",
+    "",
+    "SELECTED FILES",
+  ];
+
+  if (context.selected_files.length === 0) {
+    lines.push("none");
+  } else {
+    for (const file of context.selected_files) {
+      lines.push(
+        "",
+        "--- FILE: " + file.path + " ---",
+        "SELECTION REASON: " + file.reason,
+        file.content,
+        "--- END FILE ---",
+      );
+    }
+  }
+
+  lines.push("", "=== PROJECT OS CONTEXT END ===");
+  return lines.join("\n");
+}
+
 function parseJsonObject(text: string): unknown | null {
   const trimmed = text.trim();
 
@@ -400,7 +459,7 @@ async function requestStructuredReview(
       {
         role: "user",
         content:
-          "Analyse ce dépôt GitHub pour Project OS.\n\n" +
+          "Le bloc ci-dessous est la source de vérité de l'analyse. Il contient le contexte réel fourni par Project OS. Ne réponds jamais que le dépôt est non spécifié ou que les données sont absentes si elles sont présentes dans ce bloc. Lis d'abord PROJECT METADATA, GITHUB REPOSITORY METADATA, puis les SELECTED FILES. N'utilise que les preuves présentes dans ce bloc.\n\n" +
           input,
       },
     ],
@@ -428,7 +487,7 @@ async function requestFallbackReview(
       {
         role: "user",
         content:
-          "Réponds uniquement avec le JSON attendu. Analyse ce dépôt GitHub.\n\n" +
+          "Réponds uniquement avec le JSON attendu. Le bloc ci-dessous est la source de vérité et contient le contexte réel du dépôt. Ne réponds pas que le dépôt est non spécifié si des données sont présentes.\n\n" +
           input,
       },
     ],
@@ -443,7 +502,7 @@ export async function reviewProjectWithAI(
 ): Promise<AiReview> {
   const { url, model, think } = getOllamaConfig();
   const instructions = buildInstructions();
-  const input = JSON.stringify(context);
+  const input = buildContextInput(context);
 
   let data = await requestStructuredReview(
     url,
