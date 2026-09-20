@@ -11,7 +11,9 @@ export type ActivityType =
   | "PR_MERGED"
   | "COMMIT"
   | "RELEASE"
-  | "AI_REVIEW";
+  | "AI_REVIEW"
+  | "AI_TASK_CREATED"
+  | "AI_TASK_IGNORED";
 
 export type Activity = {
   id: string;
