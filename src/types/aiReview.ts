@@ -1,4 +1,7 @@
-export type AiEvidenceKind = "DIRECT" | "INDIRECT";
+export type AiEvidenceKind =
+  | "DIRECT"
+  | "INDIRECT"
+  | "PROJECT_OS";
 
 export type AiEvidence = {
   kind: AiEvidenceKind;
@@ -30,6 +33,13 @@ export type AiSuggestedTask = {
   confidence: number;
 };
 
+export type AiContradiction = {
+  title: string;
+  description: string;
+  evidence: AiEvidence[];
+  confidence: number;
+};
+
 export type AiReview = {
   summary: string;
   purpose: string;
@@ -38,6 +48,7 @@ export type AiReview = {
   inferred_state: string;
   state_evidence: AiEvidence[];
   observed_features: AiObservedFeature[];
+  contradictions: AiContradiction[];
   confidence: number;
   uncertainties: string[];
   suggested_tasks: AiSuggestedTask[];
