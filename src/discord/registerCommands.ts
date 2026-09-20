@@ -15,6 +15,7 @@ import { projectGithubCommand } from "./commands/projectGithub.js";
 import { projectGithubSyncCommand } from "./commands/projectGithubSync.js";
 import { projectImportGithubCommand } from "./commands/projectImportGithub.js";
 import { projectDeleteCommand } from "./commands/projectDelete.js";
+import { projectTaskDeleteCommand } from "./commands/projectTaskDelete.js";
 import { projectDiscoverCommand } from "./commands/projectDiscover.js";
 import { projectAiReviewCommand } from "./commands/projectAiReview.js";
 
@@ -51,6 +52,7 @@ await rest.put(Routes.applicationGuildCommands(clientId, guildId), {
     projectGithubSyncCommand.data.toJSON(),
     projectImportGithubCommand.data.toJSON(),
     projectDeleteCommand.data.toJSON(),
+    projectTaskDeleteCommand.data.toJSON(),
     projectDiscoverCommand.data.toJSON(),
     projectAiReviewCommand.data.toJSON(),
   ],
