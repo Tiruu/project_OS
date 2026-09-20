@@ -675,6 +675,17 @@ async function callOllama(
   url: string,
   body: Record<string, unknown>,
 ): Promise<OllamaChatResponse> {
+  const now = Date.now();
+  const waitFor =
+    GEMINI_MIN_REQUEST_INTERVAL_MS -
+    (now - lastGeminiRequestAt);
+
+  if (waitFor > 0) {
+    await sleep(waitFor);
+  }
+
+  lastGeminiRequestAt = Date.now();
+
   let response: Response;
 
   try {
@@ -896,6 +907,9 @@ const AI_REVIEW_JSON_SCHEMA = {
   },
 } as const;
 
+let lastGeminiRequestAt = 0;
+const GEMINI_MIN_REQUEST_INTERVAL_MS = 12_500;
+
 async function callGemini(
   apiKey: string,
   model: string,
@@ -945,6 +959,22 @@ async function callGemini(
       );
     }
 
+    if (response.status === 429) {
+      const retryMatch = errorBody.match(
+        /retry in ([0-9]+(?:\.[0-9]+)?)s/i,
+      );
+      const retrySeconds = retryMatch
+        ? Number.parseFloat(retryMatch[1])
+        : 15;
+
+      throw new Error(
+        "GEMINI_RATE_LIMIT:" +
+          retrySeconds +
+          ":" +
+          errorBody.slice(0, 500),
+      );
+    }
+
     throw new Error(
       "Gemini API " +
         response.status +
@@ -970,6 +1000,7 @@ async function callGeminiWithRetry(
   const delays = [0, 1500, 3500, 7000];
 
   let lastError: unknown = null;
+  let rateLimitRetries = 0;
 
   for (const delay of delays) {
     if (delay > 0) {
@@ -986,6 +1017,27 @@ async function callGeminiWithRetry(
       );
     } catch (error) {
       lastError = error;
+
+      if (
+        error instanceof Error &&
+        error.message.startsWith("GEMINI_RATE_LIMIT:")
+      ) {
+        if (rateLimitRetries >= 1) {
+          throw new Error(
+            "Gemini Free Tier : limite de requêtes atteinte. " +
+              "Attends quelques secondes avant de relancer l'analyse.",
+          );
+        }
+
+        const parts = error.message.split(":");
+        const retrySeconds = Number.parseFloat(parts[1] || "15");
+
+        rateLimitRetries += 1;
+        await sleep(
+          Math.max(1000, Math.ceil(retrySeconds * 1000) + 250),
+        );
+        continue;
+      }
 
       if (
         !(
