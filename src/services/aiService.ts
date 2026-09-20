@@ -624,6 +624,18 @@ function resolveEvidence(
   };
 }
 
+function isImportPlaceholder(
+  value: string | null | undefined,
+): boolean {
+  if (!value?.trim()) {
+    return false;
+  }
+
+  return /importé depuis github|imported from github|projet importé|project imported/i.test(
+    value,
+  );
+}
+
 function normalizeTaskSearchText(value: string): string[] {
   const stopWords = new Set([
     "avec",
@@ -766,14 +778,27 @@ function decorateReviewEvidence(
   const projectTechnologies =
     context.project_os.project.technologies.filter(Boolean);
 
+  const validProjectPurpose =
+    projectPurpose && !isImportPlaceholder(projectPurpose)
+      ? projectPurpose
+      : null;
+
+  const validProjectDescription =
+    projectDescription && !isImportPlaceholder(projectDescription)
+      ? projectDescription
+      : null;
+
+  const validRepositoryDescription =
+    repositoryDescription && !isImportPlaceholder(repositoryDescription)
+      ? repositoryDescription
+      : null;
+
   const purpose =
-    projectPurpose ||
-    projectDescription ||
-    repositoryDescription ||
+    validProjectPurpose ||
+    validProjectDescription ||
+    validRepositoryDescription ||
     (
-      /importé depuis github|imported from github|projet importé|project imported/i.test(
-        raw.purpose,
-      )
+      isImportPlaceholder(raw.purpose)
         ? "But non déterminé à partir du contexte fourni."
         : raw.purpose
     );
