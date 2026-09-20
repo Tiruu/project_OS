@@ -624,18 +624,168 @@ function resolveEvidence(
   };
 }
 
+function normalizeTaskSearchText(value: string): string[] {
+  const stopWords = new Set([
+    "avec",
+    "dans",
+    "pour",
+    "entre",
+    "comme",
+    "alors",
+    "cette",
+    "cette",
+    "code",
+    "projet",
+    "système",
+    "systeme",
+    "doit",
+    "être",
+    "etre",
+    "faire",
+    "permet",
+    "permettre",
+    "actif",
+    "active",
+  ]);
+
+  return normalizeEvidenceText(value)
+    .replace(/[^a-z0-9à-ÿ\s]/gi, " ")
+    .split(/\s+/)
+    .map((token) => token.trim())
+    .filter((token) => token.length >= 4)
+    .filter((token) => !stopWords.has(token));
+}
+
+function tasksOverlap(
+  taskTitle: string,
+  contradiction: AiEvidence[],
+): boolean {
+  const taskTokens = new Set(
+    normalizeTaskSearchText(taskTitle),
+  );
+
+  if (taskTokens.size === 0) {
+    return false;
+  }
+
+  const contradictionText = contradiction
+    .map((item) => item.claim)
+    .join(" ");
+
+  const contradictionTokens = new Set(
+    normalizeTaskSearchText(contradictionText),
+  );
+
+  let overlap = 0;
+
+  for (const token of taskTokens) {
+    if (contradictionTokens.has(token)) {
+      overlap += 1;
+    }
+  }
+
+  return overlap >= 2 ||
+    overlap / taskTokens.size >= 0.6;
+}
+
+function buildDeterministicTask(
+  contradiction: AiReview["contradictions"][number],
+  context: ProjectAiContext,
+): AiSuggestedTask | null {
+  if (contradiction.confidence < 0.85) {
+    return null;
+  }
+
+  const hasProjectOsEvidence = contradiction.evidence.some(
+    (item) => item.kind === "PROJECT_OS",
+  );
+  const hasDirectEvidence = contradiction.evidence.some(
+    (item) => item.kind === "DIRECT",
+  );
+
+  if (!hasProjectOsEvidence || !hasDirectEvidence) {
+    return null;
+  }
+
+  const projectOsSources = contradiction.evidence.filter(
+    (item) => item.kind === "PROJECT_OS",
+  );
+
+  const isDecisionContradiction = projectOsSources.some(
+    (item) =>
+      item.source.toLowerCase().includes("décision") ||
+      item.source.toLowerCase().includes("decision"),
+  );
+
+  if (!isDecisionContradiction) {
+    return null;
+  }
+
+  const activeTasks = context.project_os.tasks.filter(
+    (task) =>
+      task.status === "TODO" ||
+      task.status === "IN_PROGRESS",
+  );
+
+  if (
+    activeTasks.some((task) =>
+      tasksOverlap(task.title, contradiction.evidence),
+    )
+  ) {
+    return null;
+  }
+
+  const title =
+    "Résoudre la contradiction : " +
+    contradiction.title.trim();
+
+  return {
+    title: title.slice(0, 180),
+    task_kind: "BUG",
+    priority: contradiction.confidence >= 0.95 ? 1 : 2,
+    problem: contradiction.description,
+    reason:
+      "Proposition déterministe générée à partir d'une contradiction forte entre une décision Project OS active et le code directement observé.",
+    evidence: contradiction.evidence,
+    confidence: Math.min(1, contradiction.confidence),
+  };
+}
+
 function decorateReviewEvidence(
   raw: RawAiReview,
   context: ProjectAiContext,
 ): AiReview {
-  const projectPurpose = context.project_os.project.purpose?.trim();
-  const projectType = context.project_os.project.type?.trim();
+  const projectPurpose =
+    context.project_os.project.purpose?.trim();
+  const projectDescription =
+    context.project_os.project.description?.trim();
+  const repositoryDescription =
+    context.repository.description?.trim();
+  const projectType =
+    context.project_os.project.type?.trim();
+  const projectTechnologies =
+    context.project_os.project.technologies.filter(Boolean);
 
-  return {
+  const purpose =
+    projectPurpose ||
+    projectDescription ||
+    repositoryDescription ||
+    (
+      /importé depuis github|imported from github|projet importé|project imported/i.test(
+        raw.purpose,
+      )
+        ? "But non déterminé à partir du contexte fourni."
+        : raw.purpose
+    );
+
+  const review: AiReview = {
     summary: raw.summary,
-    purpose: projectPurpose || raw.purpose,
+    purpose,
     type: projectType || raw.type,
-    technologies: raw.technologies,
+    technologies:
+      projectTechnologies.length > 0
+        ? projectTechnologies
+        : raw.technologies,
     inferred_state: raw.inferred_state,
     state_evidence: raw.state_evidence.map((item) =>
       resolveEvidence(item, context),
@@ -669,23 +819,41 @@ function decorateReviewEvidence(
       confidence: task.confidence,
     })),
   };
+
+  for (const contradiction of review.contradictions) {
+    if (review.suggested_tasks.length >= 3) {
+      break;
+    }
+
+    const deterministicTask = buildDeterministicTask(
+      contradiction,
+      context,
+    );
+
+    if (!deterministicTask) {
+      continue;
+    }
+
+    const duplicate = review.suggested_tasks.some(
+      (task) =>
+        task.title.toLowerCase() ===
+          deterministicTask.title.toLowerCase() ||
+        tasksOverlap(task.title, contradiction.evidence),
+    );
+
+    if (!duplicate) {
+      review.suggested_tasks.push(deterministicTask);
+    }
+  }
+
+  return review;
 }
+
 
 async function callOllama(
   url: string,
   body: Record<string, unknown>,
 ): Promise<OllamaChatResponse> {
-  const now = Date.now();
-  const waitFor =
-    GEMINI_MIN_REQUEST_INTERVAL_MS -
-    (now - lastGeminiRequestAt);
-
-  if (waitFor > 0) {
-    await sleep(waitFor);
-  }
-
-  lastGeminiRequestAt = Date.now();
-
   let response: Response;
 
   try {
