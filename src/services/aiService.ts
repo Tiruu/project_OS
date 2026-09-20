@@ -46,43 +46,31 @@ const reviewSchema = {
   ],
 } as const;
 
-function requireOpenAiKey(): string {
-  const apiKey = process.env.OPENAI_API_KEY;
+type OllamaChatResponse = {
+  message?: {
+    role?: string;
+    content?: string;
+  };
+};
 
-  if (!apiKey) {
-    throw new Error(
-      "OPENAI_API_KEY manquant dans .env. Project OS ne peut pas lancer l'analyse IA.",
-    );
-  }
-
-  return apiKey;
-}
-
-function extractOutputText(response: {
-  output?: Array<{
-    type?: string;
-    content?: Array<{
-      type?: string;
-      text?: string;
-    }>;
-  }>;
-}): string {
-  const text = response.output
-    ?.flatMap((item) => item.content ?? [])
-    .find((content) => content.type === "output_text")?.text;
-
-  if (!text) {
-    throw new Error("La réponse IA ne contient aucun texte exploitable.");
-  }
-
-  return text;
+function getOllamaConfig(): {
+  url: string;
+  model: string;
+} {
+  return {
+    url:
+      process.env.OLLAMA_URL?.trim() ||
+      "http://localhost:11434/api/chat",
+    model:
+      process.env.OLLAMA_MODEL?.trim() ||
+      "qwen3:4b",
+  };
 }
 
 export async function reviewProjectWithAI(
   context: GithubRepositoryContext,
 ): Promise<AiReview> {
-  const apiKey = requireOpenAiKey();
-  const model = process.env.OPENAI_MODEL ?? "gpt-5.6-luna";
+  const { url, model } = getOllamaConfig();
 
   const instructions = `
 Tu es l'analyste de Project OS.
@@ -105,62 +93,64 @@ Règles :
 
   const input = JSON.stringify(context);
 
-  const response = await fetch("https://api.openai.com/v1/responses", {
-    method: "POST",
-    headers: {
-      Authorization: `Bearer ${apiKey}`,
-      "Content-Type": "application/json",
-    },
-    body: JSON.stringify({
-      model,
-      instructions,
-      input: [
-        {
-          role: "user",
-          content: [
-            {
-              type: "input_text",
-              text: `Analyse ce dépôt GitHub pour Project OS :\n\n${input}`,
-            },
-          ],
-        },
-      ],
-      text: {
-        format: {
-          type: "json_schema",
-          name: "project_review",
-          description: "Analyse structurée d'un projet GitHub",
-          strict: true,
-          schema: reviewSchema,
-        },
+  let response: Response;
+
+  try {
+    response = await fetch(url, {
+      method: "POST",
+      headers: {
+        "Content-Type": "application/json",
       },
-      max_output_tokens: 1400,
-    }),
-  });
+      body: JSON.stringify({
+        model,
+        stream: false,
+        think: false,
+        format: reviewSchema,
+        messages: [
+          {
+            role: "system",
+            content: instructions,
+          },
+          {
+            role: "user",
+            content: `Analyse ce dépôt GitHub pour Project OS :\n\n${input}`,
+          },
+        ],
+        options: {
+          temperature: 0,
+        },
+      }),
+    });
+  } catch (error) {
+    throw new Error(
+      `Impossible de joindre Ollama sur ${url}. Vérifie qu'Ollama est lancé et que le modèle "${model}" est installé.`,
+    );
+  }
 
   if (!response.ok) {
     const body = await response.text();
 
     throw new Error(
-      `OpenAI API ${response.status} : ${body.slice(0, 500)}`,
+      `Ollama API ${response.status} : ${body.slice(0, 500)}`,
     );
   }
 
-  const data = (await response.json()) as {
-    output?: Array<{
-      type?: string;
-      content?: Array<{
-        type?: string;
-        text?: string;
-      }>;
-    }>;
-  };
+  const data =
+    (await response.json()) as OllamaChatResponse;
 
-  const outputText = extractOutputText(data);
+  const outputText = data.message?.content;
+
+  if (!outputText) {
+    throw new Error(
+      "Ollama n'a renvoyé aucun contenu exploitable.",
+    );
+  }
 
   try {
     return JSON.parse(outputText) as AiReview;
   } catch {
-    throw new Error("La réponse IA n'est pas un JSON valide.");
+    throw new Error(
+      "Ollama a répondu avec un JSON invalide.",
+    );
   }
 }
