@@ -126,6 +126,10 @@ function buildInstructions(): string {
     "- Exemples valides : une tâche encore ouverte alors que le comportement ciblé est clairement déjà implémenté ; une décision active qui décrit un comportement contredit par le code fourni ; un état administratif qui contredit fortement ce que montrent les fichiers.",
     "- Une simple absence, différence de vocabulaire ou différence de niveau de détail n'est pas une contradiction.",
     "- Une tâche ancienne peut rester valide même si une partie de son objectif existe déjà : ne signale une contradiction que si le conflit est concret.",
+    "- Une divergence entre documentation et code n'est pas automatiquement un bug : elle peut simplement signifier que la documentation est obsolète.",
+    "- Classe une divergence documentation/code comme contradiction ou point à vérifier tant qu'un défaut du comportement n'est pas démontré.",
+    "- Une tâche de type BUG n'est justifiée que si le code montre un comportement incorrect par rapport à une règle, une décision ou une spécification suffisamment explicite ; une documentation obsolète seule ne suffit pas.",
+
     "- Chaque contradiction doit fournir au moins deux éléments de preuve utiles, représentant les deux côtés du conflit.",
     "- Tu peux produire ZERO contradiction.",
     "- Maximum 5 contradictions.",
@@ -139,6 +143,10 @@ function buildInstructions(): string {
     "- Si un problème est déjà une tâche TODO ou IN_PROGRESS, ne le repropose pas sauf si tu identifies un problème distinct et clairement documenté.",
     "- Une tâche DONE ne doit pas être reproposée sans une nouvelle preuve que le problème est revenu ou a régressé.",
     "- Une tâche doit décrire un problème réel et fournir au moins une preuve précise.",
+    "- BUG exige une preuve directe du comportement incorrect ; une simple divergence documentaire ne suffit pas.",
+    "- DOCUMENTATION est approprié lorsqu'une documentation historique ou de référence ne correspond plus au comportement actuel sans démontrer que le code est faux.",
+    "- INCOMPLETE exige une exigence explicite non satisfaite ; ne déduis pas cette exigence de la seule absence d'un fichier.",
+
     "- Les types autorisés sont : BUG, INCOMPLETE, DESIGN_GAP, REFACTOR, DOCUMENTATION, TEST.",
     "- TEST n'est pas justifié simplement parce qu'aucun test n'a été trouvé.",
     "- DESIGN_GAP n'est pas justifié simplement parce qu'une fonctionnalité n'existe pas.",
