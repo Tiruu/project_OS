@@ -183,14 +183,16 @@ function getExistingAiTaskAction(
 export async function handleAiTaskAction(
   interaction: ButtonInteraction,
 ): Promise<void> {
+  await interaction.deferUpdate();
+
   const match = interaction.customId.match(
     /^ai-task:(create|ignore):([^:]+):(\d+)$/,
   );
 
   if (!match) {
-    await interaction.reply({
-      content: "Cette proposition de tâche n'est plus valide.",
-      ephemeral: true,
+    await interaction.editReply({
+      content: AI_REVIEW_MARKER + "Cette proposition de tâche n'est plus valide.",
+      components: [],
     });
     return;
   }
@@ -202,9 +204,11 @@ export async function handleAiTaskAction(
   const reviewActivity = await getActivity(reviewActivityId);
 
   if (!reviewActivity || reviewActivity.type !== "AI_REVIEW") {
-    await interaction.reply({
-      content: "L'analyse IA liée à cette proposition est introuvable.",
-      ephemeral: true,
+    await interaction.editReply({
+      content:
+        AI_REVIEW_MARKER +
+        "L'analyse IA liée à cette proposition est introuvable.",
+      components: [],
     });
     return;
   }
@@ -213,9 +217,11 @@ export async function handleAiTaskAction(
   const task = suggestedTasks[index];
 
   if (!task) {
-    await interaction.reply({
-      content: "Cette proposition de tâche n'existe plus.",
-      ephemeral: true,
+    await interaction.editReply({
+      content:
+        AI_REVIEW_MARKER +
+        "Cette proposition de tâche n'existe plus.",
+      components: [],
     });
     return;
   }
@@ -228,12 +234,13 @@ export async function handleAiTaskAction(
   );
 
   if (existingAction) {
-    await interaction.reply({
+    await interaction.editReply({
       content:
-        existingAction.type === "AI_TASK_CREATED"
+        AI_REVIEW_MARKER +
+        (existingAction.type === "AI_TASK_CREATED"
           ? "Cette proposition a déjà été transformée en tâche."
-          : "Cette proposition a déjà été ignorée.",
-      ephemeral: true,
+          : "Cette proposition a déjà été ignorée."),
+      components: [],
     });
     return;
   }
