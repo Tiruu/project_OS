@@ -51,6 +51,24 @@ export type ProjectAiContext = GithubRepositoryContext & {
       created_at: string;
       occurred_at: string | null;
     }>;
+    reference_index: {
+      tasks: Array<{
+        id: string;
+        title: string;
+        status: Task["status"];
+      }>;
+      decisions: Array<{
+        id: string;
+        title: string;
+        status: Decision["status"];
+      }>;
+      activities: Array<{
+        id: string;
+        title: string;
+        type: Activity["type"];
+        source: string;
+      }>;
+    };
   };
 };
 
@@ -154,6 +172,26 @@ export async function getProjectAiContext(
       tasks: selectTasks(tasks),
       decisions: selectDecisions(decisions),
       recent_activities: selectRecentActivities(activities),
+      reference_index: {
+        tasks: tasks.map((task) => ({
+          id: task.id,
+          title: task.title,
+          status: task.status,
+        })),
+        decisions: decisions.map((decision) => ({
+          id: decision.id,
+          title: decision.title,
+          status: decision.status,
+        })),
+        activities: activities
+          .filter((activity) => activity.type !== "AI_REVIEW")
+          .map((activity) => ({
+            id: activity.id,
+            title: activity.title,
+            type: activity.type,
+            source: activity.source,
+          })),
+      },
     },
   };
 }
