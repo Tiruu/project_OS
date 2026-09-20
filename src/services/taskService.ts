@@ -7,7 +7,8 @@ export async function getTasks(projectId: string): Promise<Task[]> {
     .from("tasks")
     .select("*")
     .eq("project_id", projectId)
-    .order("priority", { ascending: true });
+    .order("priority", { ascending: true })
+    .order("created_at", { ascending: true });
 
   if (error) {
     throw new Error(`Impossible de récupérer les tâches : ${error.message}`);
@@ -24,6 +25,10 @@ export async function createTask(input: CreateTaskInput): Promise<Task> {
       title: input.title,
       priority: input.priority ?? 1,
       status: "TODO",
+      description: input.description,
+      kind: input.kind ?? "TASK",
+      origin: input.origin ?? "USER",
+      metadata: input.metadata ?? {},
     })
     .select()
     .single();
@@ -39,6 +44,8 @@ export async function createTask(input: CreateTaskInput): Promise<Task> {
     title: `Tâche créée : ${data.title}`,
     metadata: {
       task_id: data.id,
+      kind: data.kind,
+      origin: data.origin,
     },
   });
 
@@ -73,28 +80,24 @@ export async function deleteTask(taskId: string): Promise<Task> {
 
 export async function startTask(taskId: string): Promise<Task> {
   const { data, error } = await supabase
-  .from("tasks")
-  .update({
-    status: "IN_PROGRESS",
-  })
-  .eq("id", taskId)
-  .select()
-  .single();
-  
+    .from("tasks")
+    .update({ status: "IN_PROGRESS" })
+    .eq("id", taskId)
+    .select()
+    .single();
+
   if (error) {
     throw new Error(`Impossible de démarrer la tâche : ${error.message}`);
   }
-  
+
   await createActivity({
     project_id: data.project_id,
     type: "TASK_STARTED",
     source: "BOT",
     title: `Tâche démarrée : ${data.title}`,
-    metadata: {
-      task_id: data.id,
-    },
+    metadata: { task_id: data.id },
   });
-  
+
   return data;
 }
 
@@ -118,9 +121,7 @@ export async function completeTask(taskId: string): Promise<Task> {
     type: "TASK_COMPLETED",
     source: "BOT",
     title: `Tâche terminée : ${data.title}`,
-    metadata: {
-      task_id: data.id,
-    },
+    metadata: { task_id: data.id },
   });
 
   return data;
