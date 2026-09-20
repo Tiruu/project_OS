@@ -1,13 +1,25 @@
 import {
+  ActionRowBuilder,
   AutocompleteInteraction,
+  ButtonBuilder,
+  ButtonInteraction,
+  ButtonStyle,
   ChatInputCommandInteraction,
   SlashCommandBuilder,
 } from "discord.js";
 
-import { createActivity } from "../../services/activityService.js";
+import {
+  createActivity,
+  getActivities,
+  getActivity,
+} from "../../services/activityService.js";
+import { createTask } from "../../services/taskService.js";
 import { getProjects } from "../../services/projectService.js";
 import { getProjectAiContext } from "../../services/projectAiContextService.js";
 import { reviewProjectWithAI } from "../../services/aiService.js";
+import { syncGithubProject } from "../../services/githubService.js";
+import type { Activity } from "../../types/activity.js";
+import type { AiSuggestedTask } from "../../types/aiReview.js";
 
 const DISCORD_MAX_CONTENT_LENGTH = 2000;
 const AI_REVIEW_MARKER = "​‌‍";
@@ -103,6 +115,194 @@ async function cleanupPreviousAiReviewMessages(
   );
 }
 
+function buildAiTaskCustomId(
+  action: "create" | "ignore",
+  reviewActivityId: string,
+  index: number,
+): string {
+  return `ai-task:${action}:${reviewActivityId}:${index}`;
+}
+
+function buildAiTaskComponents(
+  reviewActivityId: string,
+  index: number,
+): ActionRowBuilder<ButtonBuilder> {
+  return new ActionRowBuilder<ButtonBuilder>().addComponents(
+    new ButtonBuilder()
+      .setCustomId(
+        buildAiTaskCustomId("create", reviewActivityId, index),
+      )
+      .setLabel("Créer la tâche")
+      .setStyle(ButtonStyle.Success),
+    new ButtonBuilder()
+      .setCustomId(
+        buildAiTaskCustomId("ignore", reviewActivityId, index),
+      )
+      .setLabel("Ignorer")
+      .setStyle(ButtonStyle.Secondary),
+  );
+}
+
+function getSuggestedTasks(activity: Activity): AiSuggestedTask[] {
+  const raw = activity.metadata.suggested_tasks;
+
+  if (!Array.isArray(raw)) {
+    return [];
+  }
+
+  return raw.filter(
+    (item): item is AiSuggestedTask =>
+      !!item &&
+      typeof item === "object" &&
+      typeof item.title === "string" &&
+      typeof item.task_kind === "string" &&
+      typeof item.priority === "number" &&
+      typeof item.problem === "string" &&
+      typeof item.reason === "string" &&
+      Array.isArray(item.evidence) &&
+      typeof item.confidence === "number",
+  );
+}
+
+function hasAiTaskAction(
+  activities: Activity[],
+  reviewActivityId: string,
+  index: number,
+  type: "AI_TASK_CREATED" | "AI_TASK_IGNORED",
+): Activity | null {
+  return (
+    activities.find(
+      (activity) =>
+        activity.type === type &&
+        activity.metadata.ai_review_activity_id === reviewActivityId &&
+        Number(activity.metadata.suggested_task_index) === index,
+    ) ?? null
+  );
+}
+
+export async function handleAiTaskAction(
+  interaction: ButtonInteraction,
+): Promise<void> {
+  const match = interaction.customId.match(
+    /^ai-task:(create|ignore):([^:]+):(\d+)$/,
+  );
+
+  if (!match) {
+    await interaction.reply({
+      content: "Cette proposition de tâche n'est plus valide.",
+      ephemeral: true,
+    });
+    return;
+  }
+
+  const action = match[1] as "create" | "ignore";
+  const reviewActivityId = match[2];
+  const index = Number.parseInt(match[3], 10);
+
+  const reviewActivity = await getActivity(reviewActivityId);
+
+  if (!reviewActivity || reviewActivity.type !== "AI_REVIEW") {
+    await interaction.reply({
+      content: "L'analyse IA liée à cette proposition est introuvable.",
+      ephemeral: true,
+    });
+    return;
+  }
+
+  const suggestedTasks = getSuggestedTasks(reviewActivity);
+  const task = suggestedTasks[index];
+
+  if (!task) {
+    await interaction.reply({
+      content: "Cette proposition de tâche n'existe plus.",
+      ephemeral: true,
+    });
+    return;
+  }
+
+  const activities = await getActivities(reviewActivity.project_id);
+  const existingAction = hasAiTaskAction(
+    activities,
+    reviewActivity.id,
+    index,
+    action === "create"
+      ? "AI_TASK_CREATED"
+      : "AI_TASK_IGNORED",
+  );
+
+  if (existingAction) {
+    await interaction.reply({
+      content:
+        action === "create"
+          ? "Cette tâche a déjà été créée depuis cette analyse."
+          : "Cette proposition a déjà été ignorée.",
+      ephemeral: true,
+    });
+    return;
+  }
+
+  if (action === "ignore") {
+    await createActivity({
+      project_id: reviewActivity.project_id,
+      type: "AI_TASK_IGNORED",
+      source: "BOT",
+      title: "Proposition IA ignorée : " + task.title,
+      description: task.problem,
+      metadata: {
+        ai_review_activity_id: reviewActivity.id,
+        suggested_task_index: index,
+        task_kind: task.task_kind,
+        confidence: task.confidence,
+        evidence: task.evidence,
+      },
+    });
+
+    await interaction.update({
+      content:
+        AI_REVIEW_MARKER +
+        "Proposition ignorée : **" +
+        task.title +
+        "**",
+      components: [],
+    });
+    return;
+  }
+
+  const createdTask = await createTask({
+    project_id: reviewActivity.project_id,
+    title: task.title,
+    priority: task.priority,
+  });
+
+  await createActivity({
+    project_id: reviewActivity.project_id,
+    type: "AI_TASK_CREATED",
+    source: "BOT",
+    title: "Tâche créée depuis l'IA : " + createdTask.title,
+    description:
+      task.problem + "\n\n" + task.reason,
+    metadata: {
+      ai_review_activity_id: reviewActivity.id,
+      suggested_task_index: index,
+      task_id: createdTask.id,
+      task_kind: task.task_kind,
+      confidence: task.confidence,
+      evidence: task.evidence,
+    },
+  });
+
+  await interaction.update({
+    content:
+      AI_REVIEW_MARKER +
+      "Tâche créée : **" +
+      createdTask.title +
+      "** (priorité " +
+      createdTask.priority +
+      ")",
+    components: [],
+  });
+}
+
 export const projectAiReviewCommand = {
   data: new SlashCommandBuilder()
     .setName("project-ai-review")
@@ -121,12 +321,15 @@ export const projectAiReviewCommand = {
     await interaction.deferReply();
 
     try {
+      const syncedGithubActivities =
+        await syncGithubProject(projectId);
+
       const context = await getProjectAiContext(projectId);
       const project = context.project_os.project;
 
       const review = await reviewProjectWithAI(context);
 
-      await createActivity({
+      const reviewActivity = await createActivity({
         project_id: project.id,
         type: "AI_REVIEW",
         source: "BOT",
@@ -144,6 +347,7 @@ export const projectAiReviewCommand = {
           confidence: review.confidence,
           uncertainties: review.uncertainties,
           suggested_tasks: review.suggested_tasks,
+          github_sync_created: syncedGithubActivities,
         },
       });
 
@@ -244,43 +448,24 @@ export const projectAiReviewCommand = {
           ? review.uncertainties.map((item) => "• " + item)
           : ["Aucune"]),
         "",
-        "**Tâches proposées (non créées)**",
+        "**Tâches proposées**",
         ...(review.suggested_tasks.length > 0
-          ? review.suggested_tasks.map(
-              (task) =>
-                "• **" +
-                task.title +
-                "** [" +
-                task.task_kind +
-                "] — priorité " +
-                task.priority +
-                " — " +
-                task.problem +
-                " — " +
-                task.reason +
-                " [preuve: " +
-                (task.evidence.length > 0
-                  ? task.evidence
-                      .slice(0, 2)
-                      .map(
-                        (item) =>
-                          item.kind +
-                          ": " +
-                          item.source +
-                          " — " +
-                          item.claim,
-                      )
-                      .join(" | ")
-                  : "non précisée") +
-                " | confiance: " +
-                Math.round(task.confidence * 100) +
-                "%]",
-            )
+          ? [
+              "• " +
+                review.suggested_tasks.length +
+                " proposition(s) — validation manuelle ci-dessous.",
+            ]
           : [
               "Aucune tâche : aucune action suffisamment justifiée n'a été identifiée.",
             ]),
         "",
-        "Aucune tâche n'a été créée automatiquement.",
+        "**Synchronisation GitHub**",
+        syncedGithubActivities === 0
+          ? "Déjà à jour."
+          : syncedGithubActivities +
+            " nouvelle(s) activité(s) importée(s).",
+        "",
+        "Les tâches proposées ci-dessous nécessitent une validation manuelle.",
       ];
 
       const chunks = splitDiscordMessage(lines.join("\n"));
@@ -289,6 +474,37 @@ export const projectAiReviewCommand = {
 
       for (const chunk of chunks.slice(1)) {
         await interaction.followUp(chunk);
+      }
+
+      for (let index = 0; index < review.suggested_tasks.length; index += 1) {
+        const task = review.suggested_tasks[index];
+
+        await interaction.followUp({
+          content:
+            AI_REVIEW_MARKER +
+            "**Proposition de tâche " +
+            (index + 1) +
+            "**\n" +
+            "**" +
+            task.title +
+            "** [" +
+            task.task_kind +
+            "] — priorité " +
+            task.priority +
+            "\n" +
+            task.problem +
+            "\n" +
+            task.reason +
+            "\nConfiance : " +
+            Math.round(task.confidence * 100) +
+            "%",
+          components: [
+            buildAiTaskComponents(
+              reviewActivity.id,
+              index,
+            ),
+          ],
+        });
       }
     } catch (error) {
       console.error("Erreur analyse IA :", error);
