@@ -10,6 +10,59 @@ import { getProjects } from "../../services/projectService.js";
 import { getGithubRepositoryContext } from "../../services/githubContextService.js";
 import { reviewProjectWithAI } from "../../services/aiService.js";
 
+const DISCORD_MAX_CONTENT_LENGTH = 2000;
+
+function splitDiscordMessage(content: string): string[] {
+  if (content.length <= DISCORD_MAX_CONTENT_LENGTH) {
+    return [content];
+  }
+
+  const chunks: string[] = [];
+  let current = "";
+
+  for (const line of content.split("\n")) {
+    const candidate =
+      current.length === 0
+        ? line
+        : current + "\n" + line;
+
+    if (candidate.length <= DISCORD_MAX_CONTENT_LENGTH) {
+      current = candidate;
+      continue;
+    }
+
+    if (current.length > 0) {
+      chunks.push(current);
+    }
+
+    if (line.length <= DISCORD_MAX_CONTENT_LENGTH) {
+      current = line;
+      continue;
+    }
+
+    for (
+      let offset = 0;
+      offset < line.length;
+      offset += DISCORD_MAX_CONTENT_LENGTH
+    ) {
+      chunks.push(
+        line.slice(
+          offset,
+          offset + DISCORD_MAX_CONTENT_LENGTH,
+        ),
+      );
+    }
+
+    current = "";
+  }
+
+  if (current.length > 0) {
+    chunks.push(current);
+  }
+
+  return chunks;
+}
+
 export const projectAiReviewCommand = {
   data: new SlashCommandBuilder()
     .setName("project-ai-review")
@@ -162,15 +215,28 @@ export const projectAiReviewCommand = {
         "Aucune tâche n'a été créée automatiquement.",
       ];
 
-      await interaction.editReply(lines.join("\n"));
+      const chunks = splitDiscordMessage(lines.join("\n"));
+
+      await interaction.editReply(chunks[0]);
+
+      for (const chunk of chunks.slice(1)) {
+        await interaction.followUp(chunk);
+      }
     } catch (error) {
       console.error("Erreur analyse IA :", error);
 
-      await interaction.editReply(
+      const message =
         error instanceof Error
           ? "Analyse IA impossible : " + error.message
-          : "Analyse IA impossible.",
-      );
+          : "Analyse IA impossible.";
+
+      const chunks = splitDiscordMessage(message);
+
+      await interaction.editReply(chunks[0]);
+
+      for (const chunk of chunks.slice(1)) {
+        await interaction.followUp(chunk);
+      }
     }
   },
 
