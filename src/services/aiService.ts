@@ -109,9 +109,12 @@ const reviewSchema = {
 } as const;
 
 type OllamaChatResponse = {
+  model?: string;
+  done_reason?: string;
   message?: {
     role?: string;
     content?: string;
+    thinking?: string;
   };
 };
 
@@ -161,6 +164,33 @@ function validateSuggestedTasks(
     .filter((task) => task.confidence >= 0 && task.confidence <= 1)
     .filter((task) => task.priority >= 1 && task.priority <= 5)
     .slice(0, 3);
+}
+
+function parseJsonObject(text: string): unknown | null {
+  const candidates = [text.trim()];
+
+  const fenced = text.match(/\`\`\`(?:json)?\s*([\s\S]*?)\s*\`\`\`/i);
+
+  if (fenced?.[1]) {
+    candidates.push(fenced[1].trim());
+  }
+
+  const firstBrace = text.indexOf("{");
+  const lastBrace = text.lastIndexOf("}");
+
+  if (firstBrace >= 0 && lastBrace > firstBrace) {
+    candidates.push(text.slice(firstBrace, lastBrace + 1));
+  }
+
+  for (const candidate of candidates) {
+    try {
+      return JSON.parse(candidate);
+    } catch {
+      // Try the next candidate.
+    }
+  }
+
+  return null;
 }
 
 export async function reviewProjectWithAI(
@@ -269,16 +299,36 @@ export async function reviewProjectWithAI(
   const data =
     (await response.json()) as OllamaChatResponse;
 
-  const outputText = data.message?.content;
+  const content = data.message?.content?.trim() ?? "";
+  const thinking = data.message?.thinking?.trim() ?? "";
+  const outputText = content || thinking;
 
   if (!outputText) {
+    const reason = data.done_reason
+      ? " (done_reason: " + data.done_reason + ")"
+      : "";
+
     throw new Error(
-      "Ollama n'a renvoyé aucun contenu exploitable.",
+      "Ollama n'a renvoyé ni contenu ni sortie de réflexion" +
+        reason +
+        ".",
+    );
+  }
+
+  const parsedValue = parseJsonObject(outputText);
+
+  if (!parsedValue) {
+    throw new Error(
+      "Ollama a répondu sans JSON exploitable" +
+        (content
+          ? "."
+          : " dans le champ content et a placé une sortie dans thinking.") +
+        " Vérifie la version d'Ollama et le modèle utilisés.",
     );
   }
 
   try {
-    const parsed = JSON.parse(outputText) as AiReview;
+    const parsed = parsedValue as AiReview;
 
     if (
       typeof parsed.confidence !== "number" ||
