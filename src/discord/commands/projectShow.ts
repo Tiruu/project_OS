@@ -27,40 +27,48 @@ export const projectShowCommand = {
     const lines = [
       `# ${dashboard.project.name}`,
       "",
-      `**État**`,
+      "**État**",
       dashboard.project.current_state ?? "Non défini",
       "",
-      `**Type**`,
+      "**Type**",
       dashboard.project.type,
       "",
-      `**Technologies**`,
+      "**Technologies**",
       dashboard.project.technologies.length > 0
         ? dashboard.project.technologies.join(", ")
         : "Aucune",
       "",
-      `**Description**`,
+      "**Description**",
       dashboard.project.description ?? "Aucune",
       "",
-      `**Tâches**`,
+      "**GitHub**",
+      ...(dashboard.githubRepositories.length > 0
+        ? dashboard.githubRepositories.map(
+            (repository) =>
+              `• ${repository.owner}/${repository.repository} — ${repository.url}`,
+          )
+        : ["Aucun dépôt connecté"]),
+      "",
+      "**Tâches**",
       `Terminées : ${dashboard.doneTasks.length}`,
       `En cours : ${dashboard.inProgressTasks.length}`,
       `À faire : ${dashboard.todoTasks.length}`,
       "",
-      `**Prochaines tâches**`,
+      "**Prochaines tâches**",
       ...(dashboard.todoTasks.length > 0
         ? dashboard.todoTasks
             .slice(0, 5)
             .map((task) => `• ${task.title} — priorité ${task.priority}`)
         : ["Aucune"]),
       "",
-      `**Décisions actives**`,
+      "**Décisions actives**",
       ...(dashboard.activeDecisions.length > 0
         ? dashboard.activeDecisions
             .slice(0, 5)
             .map((decision) => `• ${decision.title}`)
         : ["Aucune"]),
       "",
-      `**Activité récente**`,
+      "**Activité récente**",
       ...(dashboard.recentActivities.length > 0
         ? dashboard.recentActivities
             .slice(0, 5)
@@ -78,7 +86,9 @@ export const projectShowCommand = {
       const projects = await getProjects();
 
       const choices = projects
-        .filter((project) => project.name.toLowerCase().includes(focusedValue))
+        .filter((project) =>
+          project.name.toLowerCase().includes(focusedValue),
+        )
         .slice(0, 25)
         .map((project) => ({
           name: project.name,
