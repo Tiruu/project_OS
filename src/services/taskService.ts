@@ -45,6 +45,32 @@ export async function createTask(input: CreateTaskInput): Promise<Task> {
   return data;
 }
 
+export async function deleteTask(taskId: string): Promise<Task> {
+  const { data, error } = await supabase
+    .from("tasks")
+    .delete()
+    .eq("id", taskId)
+    .select()
+    .single();
+
+  if (error) {
+    throw new Error(`Impossible de supprimer la tâche : ${error.message}`);
+  }
+
+  await createActivity({
+    project_id: data.project_id,
+    type: "TASK_DELETED",
+    source: "BOT",
+    title: `Tâche supprimée : ${data.title}`,
+    metadata: {
+      task_id: data.id,
+      task_status_before_delete: data.status,
+    },
+  });
+
+  return data;
+}
+
 export async function startTask(taskId: string): Promise<Task> {
   const { data, error } = await supabase
   .from("tasks")
