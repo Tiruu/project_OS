@@ -85,6 +85,17 @@ export async function updateProject(
   return data;
 }
 
+export async function deleteProject(projectId: string): Promise<void> {
+  const { error } = await supabase
+    .from("projects")
+    .delete()
+    .eq("id", projectId);
+
+  if (error) {
+    throw new Error(`Impossible de supprimer le projet : ${error.message}`);
+  }
+}
+  
 export async function getProjectByName(name: string): Promise<Project> {
   const { data, error } = await supabase
     .from("projects")
