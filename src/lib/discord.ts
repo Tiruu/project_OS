@@ -138,30 +138,6 @@ export async function startDiscord(): Promise<void> {
           return;
         }
 
-        if (interaction.commandName === "project-brief") {
-        const { projectBriefCommand } = await import("../discord/commands/projectBrief.js");
-        await projectBriefCommand.execute(interaction);
-        return;
-      }
-
-      if (interaction.commandName === "project-decision-list") {
-        const { projectDecisionListCommand } = await import("../discord/commands/projectDecisionList.js");
-        await projectDecisionListCommand.execute(interaction);
-        return;
-      }
-
-      if (interaction.commandName === "project-decision-update") {
-        const { projectDecisionUpdateCommand } = await import("../discord/commands/projectDecisionUpdate.js");
-        await projectDecisionUpdateCommand.execute(interaction);
-        return;
-      }
-
-      if (interaction.commandName === "project-ask") {
-        const { projectAskCommand } = await import("../discord/commands/projectAsk.js");
-        await projectAskCommand.execute(interaction);
-        return;
-      }
-
       if (interaction.commandName === "project-ai-review") {
           const { projectAiReviewCommand } =
             await import("../discord/commands/projectAiReview.js");
