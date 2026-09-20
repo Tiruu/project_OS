@@ -4,7 +4,8 @@ import {
   SlashCommandBuilder,
 } from "discord.js";
 
-import { getProjects, updateProject } from "../../services/projectService.js";
+import { createActivity } from "../../services/activityService.js";
+import { getProjects, getProject, updateProject } from "../../services/projectService.js";
 
 export const projectStatusCommand = {
   data: new SlashCommandBuilder()
@@ -28,9 +29,24 @@ export const projectStatusCommand = {
     const projectId = interaction.options.getString("projet", true);
     const status = interaction.options.getString("etat", true);
 
+    const previousProject = await getProject(projectId);
+
     const project = await updateProject(projectId, {
       current_state: status,
     });
+
+    if (previousProject.current_state !== project.current_state) {
+      await createActivity({
+        project_id: project.id,
+        type: "STATUS_CHANGED",
+        source: "USER",
+        title: `État changé : ${previousProject.current_state ?? "Non défini"} → ${project.current_state ?? "Non défini"}`,
+        metadata: {
+          previous_state: previousProject.current_state,
+          current_state: project.current_state,
+        },
+      });
+    }
 
     await interaction.reply(
       `État mis à jour : **${project.name}** → **${project.current_state}**`,
@@ -44,7 +60,9 @@ export const projectStatusCommand = {
       const projects = await getProjects();
 
       const choices = projects
-        .filter((project) => project.name.toLowerCase().includes(focusedValue))
+        .filter((project) =>
+          project.name.toLowerCase().includes(focusedValue),
+        )
         .slice(0, 25)
         .map((project) => ({
           name: project.name,
