@@ -1111,7 +1111,7 @@ async function callGemini(
   thinkingLevel: "minimal" | "low" | "medium" | "high",
   input: string,
   instructions: string,
-  responseSchema = AI_REVIEW_JSON_SCHEMA,
+  responseSchema: object = AI_REVIEW_JSON_SCHEMA,
 ): Promise<GeminiInteractionResponse> {
   const url =
     "https://generativelanguage.googleapis.com/v1beta/interactions";
