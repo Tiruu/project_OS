@@ -13,6 +13,10 @@ type GithubCommit = {
     message: string;
     author?: {
       name?: string;
+      date?: string | null;
+    } | null;
+    committer?: {
+      date?: string | null;
     } | null;
   };
 };
@@ -32,6 +36,7 @@ async function githubFetch<T>(url: string): Promise<T> {
 
   const headers: Record<string, string> = {
     Accept: "application/vnd.github+json",
+    "X-GitHub-Api-Version": "2022-11-28",
     "User-Agent": "Project-OS",
   };
 
@@ -42,8 +47,16 @@ async function githubFetch<T>(url: string): Promise<T> {
   const response = await fetch(url, { headers });
 
   if (!response.ok) {
+    const acceptedPermissions = response.headers.get(
+      "x-accepted-github-permissions",
+    );
+
+    const permissionsMessage = acceptedPermissions
+      ? ` Permissions requises : ${acceptedPermissions}.`
+      : "";
+
     throw new Error(
-      `GitHub API ${response.status} : ${response.statusText}`,
+      `GitHub API ${response.status} sur ${url} : ${response.statusText}.${permissionsMessage}`,
     );
   }
 
@@ -59,6 +72,21 @@ function activityExists(
   );
 }
 
+function getCommitOccurredAt(commit: GithubCommit): string | null {
+  return commit.commit.author?.date
+    ?? commit.commit.committer?.date
+    ?? null;
+}
+
+function getPullRequestOccurredAt(
+  pullRequest: GithubPullRequest,
+): string {
+  return pullRequest.merged_at
+    ?? (pullRequest.updated_at !== pullRequest.created_at
+      ? pullRequest.updated_at
+      : pullRequest.created_at);
+}
+
 export async function syncGithubRepository(
   repository: GithubRepository,
 ): Promise<number> {
@@ -68,13 +96,22 @@ export async function syncGithubRepository(
   const baseUrl = `https://api.github.com/repos/${repositoryKey}`;
 
   const [commits, pullRequests] = await Promise.all([
-    githubFetch<GithubCommit[]>(`${baseUrl}/commits?per_page=10`),
+    githubFetch<GithubCommit[]>(
+      `${baseUrl}/commits?per_page=20`,
+    ),
     githubFetch<GithubPullRequest[]>(
-      `${baseUrl}/pulls?state=all&sort=updated&direction=desc&per_page=10`,
+      `${baseUrl}/pulls?state=all&sort=updated&direction=desc&per_page=20`,
     ),
   ]);
 
-  let created = 0;
+  const events: Array<{
+    type: ActivityType;
+    githubId: string;
+    title: string;
+    description?: string;
+    occurredAt: string | null;
+    metadata: Record<string, unknown>;
+  }> = [];
 
   for (const commit of commits) {
     const githubId = `repo:${repositoryKey}:commit:${commit.sha}`;
@@ -86,14 +123,14 @@ export async function syncGithubRepository(
     const title =
       commit.commit.message.split("\n")[0] || "Commit sans titre";
 
-    await createActivity({
-      project_id: repository.project_id,
+    events.push({
       type: "COMMIT",
-      source: "GITHUB",
+      githubId,
       title: `Commit : ${title}`,
       description: commit.commit.author?.name
         ? `Par ${commit.commit.author.name}`
         : undefined,
+      occurredAt: getCommitOccurredAt(commit),
       metadata: {
         github_id: githubId,
         sha: commit.sha,
@@ -101,8 +138,6 @@ export async function syncGithubRepository(
         repository: repositoryKey,
       },
     });
-
-    created += 1;
   }
 
   for (const pullRequest of pullRequests) {
@@ -116,22 +151,19 @@ export async function syncGithubRepository(
       type = "PR_OPENED";
     }
 
-    const eventTimestamp = isMerged
-      ? pullRequest.merged_at
-      : pullRequest.updated_at;
-
+    const occurredAt = getPullRequestOccurredAt(pullRequest);
     const githubId =
-      `repo:${repositoryKey}:pr:${pullRequest.number}:${eventTimestamp}`;
+      `repo:${repositoryKey}:pr:${pullRequest.number}:${type}:${occurredAt}`;
 
     if (activityExists(existingActivities, githubId)) {
       continue;
     }
 
-    await createActivity({
-      project_id: repository.project_id,
+    events.push({
       type,
-      source: "GITHUB",
+      githubId,
       title: `PR #${pullRequest.number} : ${pullRequest.title}`,
+      occurredAt,
       metadata: {
         github_id: githubId,
         number: pullRequest.number,
@@ -139,6 +171,33 @@ export async function syncGithubRepository(
         state: pullRequest.state,
         merged_at: pullRequest.merged_at ?? null,
         repository: repositoryKey,
+      },
+    });
+  }
+
+  events.sort((a, b) => {
+    const aTime = a.occurredAt
+      ? Date.parse(a.occurredAt)
+      : 0;
+    const bTime = b.occurredAt
+      ? Date.parse(b.occurredAt)
+      : 0;
+
+    return aTime - bTime;
+  });
+
+  let created = 0;
+
+  for (const event of events) {
+    await createActivity({
+      project_id: repository.project_id,
+      type: event.type,
+      source: "GITHUB",
+      title: event.title,
+      description: event.description,
+      metadata: {
+        ...event.metadata,
+        occurred_at: event.occurredAt,
       },
     });
 
