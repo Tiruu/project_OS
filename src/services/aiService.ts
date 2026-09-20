@@ -1024,8 +1024,8 @@ async function callGeminiWithRetry(
       ) {
         if (rateLimitRetries >= 1) {
           throw new Error(
-            "Gemini Free Tier : limite de requêtes atteinte. " +
-              "Attends quelques secondes avant de relancer l'analyse.",
+            "GEMINI_RATE_LIMIT_EXHAUSTED:" +
+              error.message.slice("GEMINI_RATE_LIMIT:".length),
           );
         }
 
@@ -1284,7 +1284,18 @@ export async function reviewProjectWithAI(
   const provider = getAiProvider();
 
   if (provider === "gemini") {
-    return reviewProjectWithGemini(context);
+    try {
+      return await reviewProjectWithGemini(context);
+    } catch (error) {
+      if (
+        error instanceof Error &&
+        error.message.startsWith("GEMINI_RATE_LIMIT_EXHAUSTED:")
+      ) {
+        return reviewProjectWithOllama(context);
+      }
+
+      throw error;
+    }
   }
 
   return reviewProjectWithOllama(context);
