@@ -7,6 +7,7 @@ export type ActivityType =
   | "STATUS_CHANGED"
   | "NOTE_ADDED"
   | "DECISION_CREATED"
+  | "DECISION_STATUS_CHANGED"
   | "PR_OPENED"
   | "PR_UPDATED"
   | "PR_MERGED"
