@@ -1,4 +1,6 @@
 import { supabase } from "../lib/supabase.js";
+import { createActivity } from "./activityService.js";
+
 import type {
   CreateProjectInput,
   Project,
@@ -51,6 +53,16 @@ export async function createProject(
   if (error) {
     throw new Error(`Impossible de créer le projet : ${error.message}`);
   }
+
+  await createActivity({
+    project_id: data.id,
+    type: "PROJECT_CREATED",
+    source: "BOT",
+    title: `Projet créé : ${data.name}`,
+    metadata: {
+      project_id: data.id,
+    },
+  });
 
   return data;
 }

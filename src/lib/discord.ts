@@ -23,7 +23,7 @@ export async function startDiscord(): Promise<void> {
           await projectShowCommand.autocomplete(interaction);
           return;
         }
-        
+
         if (interaction.commandName === "project-task") {
           const { projectTaskCommand } =
             await import("../discord/commands/projectTask.js");
@@ -61,6 +61,13 @@ export async function startDiscord(): Promise<void> {
     console.log(`Interaction reçue : ${interaction.commandName}`);
 
     try {
+      if (interaction.commandName === "project-create") {
+        const { projectCreateCommand } =
+          await import("../discord/commands/projectCreate.js");
+
+        await projectCreateCommand.execute(interaction);
+        return;
+      }
       if (interaction.commandName === "project-show") {
         const { projectShowCommand } =
           await import("../discord/commands/projectShow.js");

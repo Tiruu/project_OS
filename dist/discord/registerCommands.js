@@ -3,6 +3,7 @@ import { REST, Routes } from "discord.js";
 import { projectShowCommand } from "./commands/projectShow.js";
 import { projectTaskCommand } from "./commands/projectTask.js";
 import { projectDoneCommand } from "./commands/projectDone.js";
+import { projectCreateCommand } from "./commands/projectCreate.js";
 const token = process.env.DISCORD_TOKEN;
 const clientId = process.env.DISCORD_CLIENT_ID;
 const guildId = process.env.DISCORD_GUILD_ID;
@@ -21,6 +22,7 @@ await rest.put(Routes.applicationGuildCommands(clientId, guildId), {
         projectShowCommand.data.toJSON(),
         projectTaskCommand.data.toJSON(),
         projectDoneCommand.data.toJSON(),
+        projectCreateCommand.data.toJSON(),
     ],
 });
 console.log("Commandes Discord enregistrées.");

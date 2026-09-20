@@ -39,6 +39,11 @@ export async function startDiscord() {
         }
         console.log(`Interaction reçue : ${interaction.commandName}`);
         try {
+            if (interaction.commandName === "project-create") {
+                const { projectCreateCommand } = await import("../discord/commands/projectCreate.js");
+                await projectCreateCommand.execute(interaction);
+                return;
+            }
             if (interaction.commandName === "project-show") {
                 const { projectShowCommand } = await import("../discord/commands/projectShow.js");
                 await projectShowCommand.execute(interaction);

@@ -30,6 +30,17 @@ export const projectShowCommand = {
       `**État**`,
       dashboard.project.current_state ?? "Non défini",
       "",
+      `**Type**`,
+      dashboard.project.type,
+      "",
+      `**Technologies**`,
+      dashboard.project.technologies.length > 0
+        ? dashboard.project.technologies.join(", ")
+        : "Aucune",
+      "",
+      `**Description**`,
+      dashboard.project.description ?? "Aucune",
+      "",
       `**Tâches**`,
       `Terminées : ${dashboard.doneTasks.length}`,
       `En cours : ${dashboard.inProgressTasks.length}`,
