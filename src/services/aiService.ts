@@ -996,6 +996,7 @@ async function callGeminiWithRetry(
   thinkingLevel: "minimal" | "low" | "medium" | "high",
   input: string,
   instructions: string,
+  retryRateLimit = false,
 ): Promise<GeminiInteractionResponse> {
   const delays = [0, 1500, 3500, 7000];
 
@@ -1022,7 +1023,7 @@ async function callGeminiWithRetry(
         error instanceof Error &&
         error.message.startsWith("GEMINI_RATE_LIMIT:")
       ) {
-        if (rateLimitRetries >= 1) {
+        if (!retryRateLimit || rateLimitRetries >= 1) {
           throw new Error(
             "GEMINI_RATE_LIMIT_EXHAUSTED:" +
               error.message.slice("GEMINI_RATE_LIMIT:".length),
@@ -1101,13 +1102,21 @@ async function requestGeminiReview(
       thinkingLevel,
       input,
       instructions,
+      false,
     );
   } catch (error) {
     const isServiceUnavailable =
       error instanceof Error &&
       error.message.startsWith("GEMINI_SERVICE_UNAVAILABLE:");
 
-    if (!isServiceUnavailable || fallbackModel === model) {
+    const isRateLimited =
+      error instanceof Error &&
+      error.message.startsWith("GEMINI_RATE_LIMIT_EXHAUSTED:");
+
+    if (
+      (!isServiceUnavailable && !isRateLimited) ||
+      fallbackModel === model
+    ) {
       throw error;
     }
 
@@ -1119,12 +1128,16 @@ async function requestGeminiReview(
       [
         instructions,
         "",
-        "Mode de secours : utilise ce modèle uniquement pour terminer la même analyse.",
+        isRateLimited
+          ? "Le modèle principal est limité par le quota gratuit. Termine la même analyse avec ce modèle de secours."
+          : "Le modèle principal est temporairement indisponible. Termine la même analyse avec ce modèle de secours.",
         "Reste strictement conforme au JSON attendu.",
       ].join("\n"),
+      true,
     );
   }
 }
+
 
 
 async function reviewProjectWithGemini(
