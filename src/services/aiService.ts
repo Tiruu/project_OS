@@ -1,6 +1,9 @@
 import "dotenv/config";
 
-import type { AiReview } from "../types/aiReview.js";
+import type {
+  AiReview,
+  AiSuggestedTask,
+} from "../types/aiReview.js";
 import type { GithubRepositoryContext } from "./githubContextService.js";
 
 const reviewSchema = {
@@ -51,7 +54,23 @@ const reviewSchema = {
         additionalProperties: false,
         properties: {
           title: { type: "string" },
-          priority: { type: "integer" },
+          task_kind: {
+            type: "string",
+            enum: [
+              "BUG",
+              "INCOMPLETE",
+              "DESIGN_GAP",
+              "REFACTOR",
+              "DOCUMENTATION",
+              "TEST",
+            ],
+          },
+          priority: {
+            type: "integer",
+            minimum: 1,
+            maximum: 5,
+          },
+          problem: { type: "string" },
           reason: { type: "string" },
           evidence: {
             type: "array",
@@ -65,7 +84,9 @@ const reviewSchema = {
         },
         required: [
           "title",
+          "task_kind",
           "priority",
+          "problem",
           "reason",
           "evidence",
           "confidence",
@@ -94,24 +115,58 @@ type OllamaChatResponse = {
   };
 };
 
+type OllamaThinkLevel =
+  | false
+  | "low"
+  | "medium"
+  | "high"
+  | "max";
+
 function getOllamaConfig(): {
   url: string;
   model: string;
+  think: OllamaThinkLevel;
 } {
+  const rawThink = process.env.OLLAMA_THINK?.trim().toLowerCase() || "low";
+  const think: OllamaThinkLevel =
+    rawThink === "false"
+      ? false
+      : rawThink === "medium"
+        ? "medium"
+        : rawThink === "high"
+          ? "high"
+          : rawThink === "max"
+            ? "max"
+            : "low";
+
   return {
     url:
       process.env.OLLAMA_URL?.trim() ||
       "http://localhost:11434/api/chat",
     model:
       process.env.OLLAMA_MODEL?.trim() ||
-      "qwen3:4b",
+      "qwen3.5:4b",
+    think,
   };
+}
+
+function validateSuggestedTasks(
+  tasks: AiSuggestedTask[],
+): AiSuggestedTask[] {
+  return tasks
+    .filter((task) => task.title.trim().length > 0)
+    .filter((task) => task.problem.trim().length > 0)
+    .filter((task) => task.reason.trim().length > 0)
+    .filter((task) => task.evidence.length > 0)
+    .filter((task) => task.confidence >= 0 && task.confidence <= 1)
+    .filter((task) => task.priority >= 1 && task.priority <= 5)
+    .slice(0, 3);
 }
 
 export async function reviewProjectWithAI(
   context: GithubRepositoryContext,
 ): Promise<AiReview> {
-  const { url, model } = getOllamaConfig();
+  const { url, model, think } = getOllamaConfig();
 
   const instructions = [
     "Tu es l'analyste technique de Project OS.",
@@ -127,7 +182,7 @@ export async function reviewProjectWithAI(
     "6. métadonnées du dépôt",
     "7. données déjà stockées dans Project OS",
     "",
-    "Règles impératives :",
+    "Règles impératives pour l'analyse :",
     "- N'affirme jamais qu'une fonctionnalité existe uniquement parce que son nom est suggéré par un dossier, un commit ou une description.",
     "- Chaque fonctionnalité observée doit citer au moins un fichier présent dans selected_files ou repository_tree.",
     "- Ne confonds jamais l'état administratif de Project OS avec l'état réel du projet.",
@@ -136,13 +191,22 @@ export async function reviewProjectWithAI(
     "- technologies doit contenir uniquement les technologies réellement observables ou très solidement déduites.",
     "- purpose décrit le but probable du projet à partir des preuves disponibles.",
     "- observed_features doit lister 2 à 8 fonctionnalités ou sous-systèmes réellement observables quand c'est possible.",
-    "- suggested_tasks doit contenir au maximum 5 tâches concrètes et spécifiques au dépôt.",
-    "- Une tâche doit être directement justifiée par les preuves disponibles.",
-    "- Interdis les recommandations vagues du type 'ajouter des tests', 'améliorer les performances' ou 'mettre à jour les dépendances' sans preuve spécifique.",
-    "- Chaque tâche doit citer au moins une preuve.",
+    "",
+    "Règles impératives pour les tâches :",
+    "- Tu n'es PAS chargé de remplir une roadmap. Tu peux proposer zéro tâche.",
+    "- Une absence de fonctionnalité n'est PAS un problème en soi.",
+    "- Avant de proposer une tâche, cherche explicitement dans les fichiers fournis si la fonctionnalité est déjà implémentée.",
+    "- Si les preuves montrent que la fonctionnalité existe déjà, ne propose pas de tâche pour simplement l'ajouter.",
+    "- Une tâche n'est autorisée que si tu peux identifier un problème concret : bug, fonctionnalité réellement incomplète, dette/refactor clairement justifié, trou de conception documenté, documentation manquante explicitement nécessaire, ou test justifié par un comportement critique/non couvert et réellement identifiable.",
+    "- Une tâche de type TEST n'est PAS justifiée simplement parce qu'aucun test n'a été vu.",
+    "- Une tâche de type DESIGN_GAP n'est PAS justifiée simplement parce qu'une fonctionnalité n'existe pas.",
+    "- Interdis les recommandations génériques du type 'ajouter des tests', 'améliorer les performances', 'mettre à jour les dépendances', 'ajouter des notifications' ou 'gérer les branches' sans problème concret observé.",
+    "- Pour chaque tâche, problem explique le problème réellement observé.",
+    "- Pour chaque tâche, reason explique pourquoi ce problème mérite une action maintenant.",
+    "- evidence doit citer au moins un fichier ou élément précis qui démontre le problème.",
+    "- Si tu n'as pas suffisamment de preuves pour une tâche, place le point dans uncertainties et ne crée pas de tâche.",
+    "- suggested_tasks contient au maximum 3 tâches. Il est préférable d'en produire 0 à 2 que d'inventer des améliorations.",
     "- confidence est entre 0 et 1.",
-    "- uncertainties doit signaler ce qui reste réellement inconnu.",
-    "- Ne crée aucune tâche automatiquement : tu proposes seulement.",
     "- Réponds strictement selon le JSON schema fourni.",
     "",
     "Contrainte importante :",
@@ -162,7 +226,7 @@ export async function reviewProjectWithAI(
       body: JSON.stringify({
         model,
         stream: false,
-        think: false,
+        think,
         format: reviewSchema,
         messages: [
           {
@@ -223,6 +287,10 @@ export async function reviewProjectWithAI(
     ) {
       throw new Error("confidence invalide");
     }
+
+    parsed.suggested_tasks = validateSuggestedTasks(
+      parsed.suggested_tasks,
+    );
 
     return parsed;
   } catch {
