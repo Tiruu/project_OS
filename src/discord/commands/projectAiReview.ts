@@ -4,10 +4,9 @@ import {
   SlashCommandBuilder,
 } from "discord.js";
 
-import { createActivity, getActivities } from "../../services/activityService.js";
-import { getGithubRepositories } from "../../services/githubRepositoryService.js";
+import { createActivity } from "../../services/activityService.js";
 import { getProjects } from "../../services/projectService.js";
-import { getGithubRepositoryContext } from "../../services/githubContextService.js";
+import { getProjectAiContext } from "../../services/projectAiContextService.js";
 import { reviewProjectWithAI } from "../../services/aiService.js";
 
 const DISCORD_MAX_CONTENT_LENGTH = 2000;
@@ -122,47 +121,8 @@ export const projectAiReviewCommand = {
     await interaction.deferReply();
 
     try {
-      const projects = await getProjects();
-      const project = projects.find((item) => item.id === projectId);
-
-      if (!project) {
-        throw new Error("Projet introuvable.");
-      }
-
-      const repositories = await getGithubRepositories(project.id);
-
-      if (repositories.length === 0) {
-        throw new Error(
-          "Ce projet n'a aucun dépôt GitHub connecté.",
-        );
-      }
-
-      const repository = repositories[0];
-
-      const [context, activities] = await Promise.all([
-        getGithubRepositoryContext(
-          repository.owner,
-          repository.repository,
-        ),
-        getActivities(project.id),
-      ]);
-
-      context.project = {
-        name: project.name,
-        type: project.type,
-        technologies: project.technologies,
-        description: project.description,
-        current_state: project.current_state,
-      };
-
-      context.recent_activity = activities
-        .filter((activity) => activity.source === "GITHUB")
-        .slice(0, 10)
-        .map((activity) =>
-          activity.description
-            ? activity.title + " — " + activity.description
-            : activity.title,
-        );
+      const context = await getProjectAiContext(projectId);
+      const project = context.project_os.project;
 
       const review = await reviewProjectWithAI(context);
 
@@ -180,6 +140,7 @@ export const projectAiReviewCommand = {
           inferred_state: review.inferred_state,
           state_evidence: review.state_evidence,
           observed_features: review.observed_features,
+          contradictions: review.contradictions,
           confidence: review.confidence,
           uncertainties: review.uncertainties,
           suggested_tasks: review.suggested_tasks,
@@ -246,6 +207,34 @@ export const projectAiReviewCommand = {
                   : ""),
             )
           : ["Aucun identifié avec suffisamment de preuves."]),
+        ...(review.contradictions.length > 0
+          ? [
+              "",
+              "**Contradictions / points à vérifier**",
+              ...review.contradictions.map(
+                (contradiction) =>
+                  "• **" +
+                  contradiction.title +
+                  "** — " +
+                  contradiction.description +
+                  " [" +
+                  contradiction.evidence
+                    .slice(0, 4)
+                    .map(
+                      (item) =>
+                        item.kind +
+                        ": " +
+                        item.source +
+                        " — " +
+                        item.claim,
+                    )
+                    .join(" | ") +
+                  " | confiance: " +
+                  Math.round(contradiction.confidence * 100) +
+                  "%]",
+              ),
+            ]
+          : []),
         "",
         "**Confiance globale**",
         Math.round(review.confidence * 100) + "%",
@@ -255,7 +244,7 @@ export const projectAiReviewCommand = {
           ? review.uncertainties.map((item) => "• " + item)
           : ["Aucune"]),
         "",
-        "**Tâches proposées**",
+        "**Tâches proposées (non créées)**",
         ...(review.suggested_tasks.length > 0
           ? review.suggested_tasks.map(
               (task) =>
