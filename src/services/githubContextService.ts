@@ -209,7 +209,46 @@ function isAnalyzableFile(path: string): boolean {
   return ANALYZABLE_EXTENSIONS.has(getExtension(path));
 }
 
-function scoreContextFile(path: string): {
+function normalizeFocusTokens(focusText: string | null): string[] {
+  if (!focusText?.trim()) {
+    return [];
+  }
+
+  return focusText
+    .toLowerCase()
+    .normalize("NFD")
+    .replace(/[\u0300-\u036f]/g, "")
+    .replace(/[^a-z0-9_./-]+/g, " ")
+    .split(/\s+/)
+    .filter((token) => token.length >= 4)
+    .slice(0, 16);
+}
+
+function isDevelopmentPlanningQuestion(focusText: string | null): boolean {
+  const text = focusText?.toLowerCase() ?? "";
+
+  return [
+    "suite du développement",
+    "suite du developpement",
+    "prochaine modification",
+    "prochaine tâche",
+    "prochaine tache",
+    "prochaine fonctionnalité",
+    "prochaine fonctionnalite",
+    "quoi faire ensuite",
+    "quelle modification",
+    "quelle fonctionnalité",
+    "quelle fonctionnalite",
+    "next step",
+    "next feature",
+    "next task",
+  ].some((phrase) => text.includes(phrase));
+}
+
+function scoreContextFile(
+  path: string,
+  focusText: string | null = null,
+): {
   score: number;
   reason: string;
 } {
@@ -286,6 +325,56 @@ function scoreContextFile(path: string): {
   } else if (getExtension(path) === ".md") {
     score += 40;
     reason = "Documentation";
+  }
+
+  const focusTokens = normalizeFocusTokens(focusText);
+
+  if (focusTokens.length > 0) {
+    const pathTokens = lower
+      .replace(/[^a-z0-9_./-]+/g, " ")
+      .split(/[\s/_.-]+/)
+      .filter((token) => token.length >= 4);
+
+    const focusMatches = focusTokens.filter((token) =>
+      pathTokens.some((pathToken) =>
+        pathToken === token || pathToken.includes(token) || token.includes(pathToken),
+      ),
+    ).length;
+
+    score += focusMatches * 35;
+  }
+
+  if (isDevelopmentPlanningQuestion(focusText)) {
+    if (getExtension(path) === ".gd") {
+      score += 90;
+      reason = "Code gameplay actuel";
+    }
+
+    if (
+      lower.includes("/scripts/") ||
+      lower.startsWith("scripts/") ||
+      lower.includes("/src/") ||
+      lower.startsWith("src/")
+    ) {
+      score += 45;
+    }
+
+    if (
+      fileName.includes("journal") ||
+      fileName.includes("roadmap") ||
+      fileName.includes("changelog")
+    ) {
+      score += 90;
+      reason = "Historique et feuille de route du projet";
+    }
+
+    if (fileName === "project.godot") {
+      score -= 120;
+    }
+
+    if (fileName.endsWith(".tscn")) {
+      score += 15;
+    }
   }
 
   const depth = path.split("/").length;
@@ -415,7 +504,7 @@ function selectContextFiles(
     .filter((entry) => entry.path !== readmePath)
     .filter((entry) => entry.path !== packageJsonPath)
     .map((entry) => {
-      const scored = scoreContextFile(entry.path);
+      const scored = scoreContextFile(entry.path, focusText);
 
       return {
         path: entry.path,
