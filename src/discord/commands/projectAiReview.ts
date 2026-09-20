@@ -263,7 +263,7 @@ export async function handleAiTaskAction(
       },
     });
 
-    await interaction.update({
+    await interaction.editReply({
       content:
         AI_REVIEW_MARKER +
         "Proposition ignorée : **" +
@@ -299,7 +299,7 @@ export async function handleAiTaskAction(
     },
   });
 
-  await interaction.update({
+  await interaction.editReply({
     content:
       AI_REVIEW_MARKER +
       "Tâche créée : **" +
