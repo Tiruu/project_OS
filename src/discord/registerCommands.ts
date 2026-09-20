@@ -18,6 +18,9 @@ import { projectDeleteCommand } from "./commands/projectDelete.js";
 import { projectTaskDeleteCommand } from "./commands/projectTaskDelete.js";
 import { projectDiscoverCommand } from "./commands/projectDiscover.js";
 import { projectAiReviewCommand } from "./commands/projectAiReview.js";
+import { projectBriefCommand } from "./commands/projectBrief.js";
+import { projectDecisionListCommand } from "./commands/projectDecisionList.js";
+import { projectDecisionUpdateCommand } from "./commands/projectDecisionUpdate.js";
 
 const token = process.env.DISCORD_TOKEN;
 const clientId = process.env.DISCORD_CLIENT_ID;
@@ -55,6 +58,9 @@ await rest.put(Routes.applicationGuildCommands(clientId, guildId), {
     projectTaskDeleteCommand.data.toJSON(),
     projectDiscoverCommand.data.toJSON(),
     projectAiReviewCommand.data.toJSON(),
+    projectBriefCommand.data.toJSON(),
+    projectDecisionListCommand.data.toJSON(),
+    projectDecisionUpdateCommand.data.toJSON(),
   ],
 });
 
