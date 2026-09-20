@@ -675,6 +675,28 @@ async function requestFallbackReview(
   });
 }
 
+function buildCompactAiInput(context: ProjectAiContext): string {
+  return JSON.stringify({
+    repository: context.repository,
+    repository_tree: context.repository_tree.slice(0, 120),
+    selected_files: context.selected_files.slice(0, 6).map((file) => ({
+      path: file.path,
+      reason: file.reason,
+      content: file.content.slice(0, 4500),
+    })),
+    readme: context.readme
+      ? context.readme.slice(0, 5000)
+      : null,
+    package_json: context.package_json,
+    project_os: {
+      project: context.project_os.project,
+      tasks: context.project_os.tasks.slice(0, 10),
+      decisions: context.project_os.decisions.slice(0, 8),
+      recent_activities: context.project_os.recent_activities.slice(0, 12),
+    },
+  });
+}
+
 function tryParseAiReview(
   content: string,
   context: ProjectAiContext,
@@ -752,14 +774,42 @@ export async function reviewProjectWithAI(
     return fallbackReview;
   }
 
+  const compactInput = buildCompactAiInput(context);
+
+  const compactResponse = await requestFallbackReview(
+    url,
+    model,
+    compactInput,
+    [
+      instructions,
+      "",
+      "Dernier mode de secours.",
+      "Le contexte a été volontairement réduit pour éviter une sortie tronquée.",
+      "Produis un JSON très compact et strict.",
+      "Maximum 4 observed_features, 2 contradictions et 1 suggested_task.",
+      "Chaque description, preuve et incertitude doit rester courte.",
+      "N'ajoute aucune explication, aucun markdown et aucune réflexion.",
+    ].join("\n"),
+  );
+
+  const compactContent = compactResponse.message?.content?.trim() ?? "";
+  const compactReview = tryParseAiReview(
+    compactContent,
+    context,
+  );
+
+  if (compactReview) {
+    return compactReview;
+  }
+
   const reason =
-    fallbackResponse.done_reason
-      ? " (done_reason: " + fallbackResponse.done_reason + ")"
+    compactResponse.done_reason
+      ? " (done_reason: " + compactResponse.done_reason + ")"
       : "";
 
   throw new Error(
     "Ollama a répondu sans JSON exploitable" +
       reason +
-      ". Le modèle a peut-être tronqué ou mal structuré sa réponse.",
+      ". Les tentatives normale et compacte ont échoué.",
   );
 }
