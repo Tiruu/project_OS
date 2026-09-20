@@ -1,5 +1,6 @@
 import type { Activity } from "./activity.js";
 import type { Decision } from "./decision.js";
+import type { GithubRepository } from "./githubRepository.js";
 import type { Project } from "./project.js";
 import type { Task } from "./task.js";
 
@@ -11,4 +12,5 @@ export type ProjectDashboard = {
   doneTasks: Task[];
   recentActivities: Activity[];
   activeDecisions: Decision[];
+  githubRepositories: GithubRepository[];
 };
