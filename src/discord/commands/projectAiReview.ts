@@ -211,7 +211,15 @@ export const projectAiReviewCommand = {
               "**Preuves de l'état**",
               ...review.state_evidence
                 .slice(0, 5)
-                .map((item) => "• " + item),
+                .map(
+                  (item) =>
+                    "• [" +
+                    item.kind +
+                    "] " +
+                    item.source +
+                    " — " +
+                    item.claim,
+                ),
             ]
           : []),
         "",
