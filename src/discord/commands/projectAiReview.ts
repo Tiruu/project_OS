@@ -278,6 +278,10 @@ export async function handleAiTaskAction(
     project_id: reviewActivity.project_id,
     title: task.title,
     priority: task.priority,
+    description: task.problem + "\n\n" + task.reason,
+    kind: task.task_kind,
+    origin: "AI_REVIEW",
+    metadata: { confidence: task.confidence, evidence: task.evidence },
   });
 
   await createActivity({
