@@ -185,9 +185,9 @@ export async function reviewProjectWithAI(
     throw new Error(
       "Impossible de joindre Ollama sur " +
         url +
-        '. Vérifie qu'Ollama est lancé et que le modèle "' +
+        ". Vérifie qu'Ollama est lancé et que le modèle \"" +
         model +
-        '" est installé.',
+        "\" est installé.",
     );
   }
 
