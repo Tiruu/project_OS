@@ -1,8 +1,11 @@
-import { createActivity } from "./activityService.js";
+import "dotenv/config";
+
+import { createActivity, getActivities } from "./activityService.js";
 import { getGithubRepositories } from "./githubRepositoryService.js";
 
-import type { GithubRepository } from "../types/githubRepository.js";
+import type { Activity } from "../types/activity.js";
 import type { ActivityType } from "../types/activity.js";
+import type { GithubRepository } from "../types/githubRepository.js";
 
 type GithubCommit = {
   sha: string;
@@ -49,7 +52,7 @@ async function githubFetch<T>(url: string): Promise<T> {
 }
 
 function activityExists(
-  projectActivities: Awaited<ReturnType<typeof import("./activityService.js").getActivities>>,
+  projectActivities: Activity[],
   githubId: string,
 ): boolean {
   return projectActivities.some(
@@ -60,7 +63,6 @@ function activityExists(
 export async function syncGithubRepository(
   repository: GithubRepository,
 ): Promise<number> {
-  const { getActivities } = await import("./activityService.js");
   const existingActivities = await getActivities(repository.project_id);
 
   const baseUrl = `https://api.github.com/repos/${repository.owner}/${repository.repository}`;
@@ -81,7 +83,8 @@ export async function syncGithubRepository(
       continue;
     }
 
-    const title = commit.commit.message.split("\n")[0] || "Commit sans titre";
+    const title =
+      commit.commit.message.split("\n")[0] || "Commit sans titre";
 
     await createActivity({
       project_id: repository.project_id,
