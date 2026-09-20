@@ -22,18 +22,41 @@ export async function getGithubRepositories(
   return data;
 }
 
+export async function getGithubRepositoryByRemote(
+  owner: string,
+  repository: string,
+): Promise<GithubRepository | null> {
+  const { data, error } = await supabase
+    .from("github_repositories")
+    .select("*")
+    .eq("owner", owner)
+    .eq("repository", repository)
+    .maybeSingle();
+
+  if (error) {
+    throw new Error(
+      `Impossible de rechercher le dépôt GitHub : ${error.message}`,
+    );
+  }
+
+  return data;
+}
+
 export async function connectGithubRepository(
   input: CreateGithubRepositoryInput,
 ): Promise<GithubRepository> {
-  const { data: existing } = await supabase
-    .from("github_repositories")
-    .select("*")
-    .eq("project_id", input.project_id)
-    .eq("owner", input.owner)
-    .eq("repository", input.repository)
-    .maybeSingle();
+  const existing = await getGithubRepositoryByRemote(
+    input.owner,
+    input.repository,
+  );
 
   if (existing) {
+    if (existing.project_id !== input.project_id) {
+      throw new Error(
+        `Le dépôt ${input.owner}/${input.repository} est déjà connecté à un autre projet.`,
+      );
+    }
+
     return existing;
   }
 
