@@ -464,6 +464,7 @@ export async function getGithubRepositoryContext(
       visibility: remote.visibility ?? "unknown",
     },
     repository_tree: tree
+      .filter((entry) => !isIgnoredPath(entry.path))
       .map((entry) => entry.path)
       .sort()
       .slice(0, MAX_TREE_ENTRIES),
