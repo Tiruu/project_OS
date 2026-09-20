@@ -4,9 +4,19 @@ export type AiObservedFeature = {
   evidence: string[];
 };
 
+export type AiTaskKind =
+  | "BUG"
+  | "INCOMPLETE"
+  | "DESIGN_GAP"
+  | "REFACTOR"
+  | "DOCUMENTATION"
+  | "TEST";
+
 export type AiSuggestedTask = {
   title: string;
+  task_kind: AiTaskKind;
   priority: number;
+  problem: string;
   reason: string;
   evidence: string[];
   confidence: number;
