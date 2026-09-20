@@ -153,7 +153,7 @@ export async function syncGithubRepository(
 
     const occurredAt = getPullRequestOccurredAt(pullRequest);
     const githubId =
-      `repo:${repositoryKey}:pr:${pullRequest.number}:${type}:${occurredAt}`;
+      `repo:${repositoryKey}:pr:${pullRequest.number}:${occurredAt}`;
 
     if (activityExists(existingActivities, githubId)) {
       continue;
