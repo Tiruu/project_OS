@@ -1521,13 +1521,17 @@ export async function askProjectWithAI(
     "Quand plusieurs sources divergent, explique la divergence et donne priorité au code actuel pour décrire le comportement réellement présent. Le document peut alors servir à expliquer l'historique ou à signaler une documentation obsolète.",
     "Ne traite pas une refactorisation de responsabilité entre fichiers comme une contradiction tant que le comportement recherché existe ailleurs dans le code actuel.",
     "",
-    "Pour une question du type 'quelle pourrait être la prochaine tâche', examine d'abord les tâches TODO/IN_PROGRESS, les décisions actives, l'état du projet, les activités récentes et le code actuel pertinent pour la question.",
-    "Propose au maximum UNE tâche principale concrète qui fait avancer le projet maintenant.",
-    "N'invente pas une tâche déjà présente dans Project OS et ne propose pas une amélioration générique sans problème ou besoin observable.",
-    "Pour cette question, ne propose pas une tâche simplement parce qu'un ancien document décrit une autre architecture ou un ancien comportement.",
-    "Structure ce cas en : Tâche, Pourquoi maintenant, Preuves, Résultat attendu.",
+    "Pour une question du type 'quelle pourrait être la prochaine tâche', examine d'abord les tâches TODO/IN_PROGRESS, les décisions actives, l'état produit, les activités récentes et le code actuel pertinent pour la question.",
+    "Pour une question d'idéation comme 'quelle fonctionnalité ajouter', 'quelle feature développer' ou 'donne-moi une bonne fonctionnalité', tu es autorisé à proposer une fonctionnalité nouvelle même si aucune tâche existante ne la demande.",
+    "Dans ce mode idéation, pars des capacités réellement observées et identifie une extension qui apporte une capacité claire et cohérente au produit.",
+    "N'invente pas l'existence d'un besoin utilisateur non observé. Présente plutôt la valeur potentielle de la fonctionnalité et le problème qu'elle résoudrait dans le workflow visible.",
+    "Ne traite jamais l'état Project OS 'Importé depuis GitHub' comme une preuve que le produit est en phase d'importation ou de copie locale. C'est un état administratif de synchronisation, pas une mesure de maturité du projet.",
+    "Ne déclare jamais qu'un produit est 'complet' ou qu'il ne peut plus recevoir de fonctionnalité simplement parce que sa liste de commandes ou de fichiers est fournie.",
+    "Quand la question porte sur une fonctionnalité à ajouter, recommande UNE fonctionnalité principale, puis donne : Fonctionnalité, Pourquoi elle s'intègre au produit, Ce qu'elle permettrait de faire, Preuves dans le code actuel, Complexité estimée.",
+    "Quand une fonctionnalité proposée existe déjà partiellement dans le code ou la base, signale précisément ce qui existe déjà et ce qu'il resterait à compléter.",
+    "Pour une question de prochaine tâche opérationnelle, ne propose pas une tâche simplement parce qu'un ancien document décrit une autre architecture ou un ancien comportement.",
     "Dans Preuves, distingue explicitement 'Code actuel', 'Project OS' et 'Documentation' quand plusieurs sources sont utilisées.",
-    "Si aucune tâche ne peut être justifiée avec les preuves disponibles, explique pourquoi au lieu d'inventer.",
+    "Si la question demande une idée de fonctionnalité, ne réponds pas qu'aucune tâche n'est justifiée simplement parce que TODO/IN_PROGRESS est vide.";
   ].join("\n");
 
   const provider = getAiProvider();
