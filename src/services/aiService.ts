@@ -456,20 +456,6 @@ export async function reviewProjectWithAI(
   let content = data.message?.content?.trim() ?? "";
 
   if (!content) {
-    const thinking = data.message?.thinking?.trim() ?? "";
-
-    if (thinking) {
-      const thinkingJson = parseJsonObject(thinking);
-
-      if (thinkingJson) {
-        try {
-          return assertReview(thinkingJson);
-        } catch {
-          // Continue to the fallback request.
-        }
-      }
-    }
-
     data = await requestFallbackReview(
       url,
       model,
