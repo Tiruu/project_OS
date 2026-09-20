@@ -125,6 +125,32 @@ export async function startDiscord(): Promise<void> {
       return;
     }
 
+    if (interaction.isButton()) {
+      if (interaction.customId.startsWith("github-import:")) {
+        try {
+          const { projectDiscoverCommand } =
+            await import("../discord/commands/projectDiscover.js");
+
+          await projectDiscoverCommand.handleImport(interaction);
+        } catch (error) {
+          console.error("Erreur bouton import GitHub :", error);
+
+          if (interaction.replied || interaction.deferred) {
+            await interaction.followUp(
+              "Une erreur est survenue pendant l'import GitHub.",
+            );
+          } else {
+            await interaction.reply({
+              content: "Une erreur est survenue pendant l'import GitHub.",
+              ephemeral: true,
+            });
+          }
+        }
+      }
+
+      return;
+    }
+
     if (!interaction.isChatInputCommand()) {
       return;
     }
