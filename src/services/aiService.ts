@@ -1602,7 +1602,7 @@ const PROJECT_COMPANION_SCHEMA = {
 const MAX_COMPANION_INPUT_CHARS = 60_000;
 const MAX_REPOSITORIES_IN_CONTEXT = 6;
 const MAX_RETRIEVAL_DOCUMENTS = 4;
-const MAX_RETRIEVAL_FILES = 7;
+const MAX_RETRIEVAL_FILES = 5;
 const MAX_MEMORY_ITEMS = 8;
 
 function compactCompanionText(
@@ -2129,9 +2129,20 @@ function retrieveCompanionCandidates(
     )
     .slice(0, MAX_RETRIEVAL_DOCUMENTS);
 
-  const files = candidates
-    .filter((candidate) => candidate.kind === "CODE_OR_DOCUMENT")
-    .slice(0, MAX_RETRIEVAL_FILES);
+  const fileCandidates = candidates.filter(
+    (candidate) => candidate.kind === "CODE_OR_DOCUMENT",
+  );
+
+  const relevantFiles =
+    tokens.length > 0
+      ? fileCandidates.filter((candidate) => candidate.score > 0)
+      : fileCandidates;
+
+  const files = (
+    relevantFiles.length > 0
+      ? relevantFiles
+      : fileCandidates
+  ).slice(0, MAX_RETRIEVAL_FILES);
 
   if (
     planningRequest &&
