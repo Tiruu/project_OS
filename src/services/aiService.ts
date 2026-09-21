@@ -1544,50 +1544,78 @@ const PROJECT_ASK_GENERAL_SCHEMA = {
   },
 } as const;
 
-function normalizeQuestion(value: string): string {
-  return value
-    .toLowerCase()
-    .normalize("NFD")
-    .replace(/[\\u0300-\\u036f]/g, "");
+const PROJECT_ASK_MODE_SCHEMA = {
+  type: "object",
+  required: ["mode"],
+  properties: {
+    mode: {
+      type: "string",
+      enum: ["GENERAL", "PLANNING", "FEATURE"],
+    },
+  },
+} as const;
+
+function buildProjectAskModeInput(
+  context: ProjectAiContext,
+  question: string,
+): string {
+  return JSON.stringify({
+    question,
+    project: {
+      name: context.project_os.project.name,
+      type: context.project_os.project.type,
+      purpose: context.project_os.project.purpose,
+      current_state: context.project_os.project.current_state,
+    },
+    active_tasks: context.project_os.active_tasks,
+    active_decisions: context.project_os.active_decisions,
+  });
 }
 
-function classifyProjectAskMode(question: string): ProjectAskMode {
-  const normalized = normalizeQuestion(question);
+function buildProjectAskModeInstructions(): string {
+  return [
+    "Tu es le routeur d'intention de Project OS.",
+    "Ta seule mission est de déterminer dans quel mode /project-ask doit traiter la question.",
+    "",
+    "Modes autorisés :",
+    "GENERAL = question générale, explication, diagnostic, compréhension ou demande qui ne demande pas explicitement de choisir la prochaine étape ni d'imaginer une nouvelle fonctionnalité.",
+    "PLANNING = l'utilisateur demande quoi faire ensuite, la prochaine étape, la prochaine modification, la suite du développement, ou quelle tâche de développement prioriser.",
+    "FEATURE = l'utilisateur demande d'imaginer, proposer ou choisir une nouvelle fonctionnalité à ajouter au jeu.",
+    "",
+    "Comprends le sens de la question, pas des mots-clés exacts.",
+    "Les accents, fautes de frappe, synonymes, formulations naturelles et ordre des mots ne doivent jamais changer l'intention lorsqu'elle reste compréhensible.",
+    "Par exemple, 'quelle est la suite du développement ?', 'on fait quoi ensuite ?', 'tu me conseilles quoi pour continuer le jeu ?' et 'quelle prochaine modif ?' sont PLANNING.",
+    "Une question qui parle du développement sans demander la prochaine étape n'est pas automatiquement PLANNING.",
+    "Une question qui demande une idée de nouvelle mécanique ou fonctionnalité est FEATURE.",
+    "En cas d'ambiguïté réelle, choisis GENERAL.",
+    "",
+    "Ne réponds pas à la question. Retourne uniquement un objet JSON conforme au schéma fourni.",
+  ].join("\\n");
+}
 
-  const planningPatterns = [
-    "suite du developpement",
-    "suite du developpement de mon jeu",
-    "prochaine modification",
-    "prochaine tache",
-    "prochain etape",
-    "prochaine etape",
-    "quoi faire ensuite",
-    "que faire ensuite",
-    "quelle modification apporter",
-    "next step",
-    "next task",
-  ];
+async function classifyProjectAskMode(
+  context: ProjectAiContext,
+  question: string,
+): Promise<ProjectAskMode> {
+  const raw = await requestProjectAskStructured(
+    buildProjectAskModeInput(context, question),
+    buildProjectAskModeInstructions(),
+    PROJECT_ASK_MODE_SCHEMA,
+  );
 
-  if (planningPatterns.some((pattern) => normalized.includes(pattern))) {
-    return "PLANNING";
+  const parsed = parseJsonObject(raw);
+
+  if (!parsed || typeof parsed !== "object") {
+    throw new Error("Le classifieur IA de /project-ask n'a pas renvoyé de JSON exploitable.");
   }
 
-  const featurePatterns = [
-    "quelle fonctionnalite ajouter",
-    "quelle fonctionnalite developper",
-    "quelle feature ajouter",
-    "donne moi une bonne fonctionnalite",
-    "donne-moi une bonne fonctionnalite",
-    "propose une fonctionnalite",
-    "fonctionnalite a ajouter",
-    "fonctionnalite à ajouter",
-  ];
+  const mode = (parsed as Record<string, unknown>).mode;
 
-  if (featurePatterns.some((pattern) => normalized.includes(pattern))) {
-    return "FEATURE";
+  if (mode === "GENERAL" || mode === "PLANNING" || mode === "FEATURE") {
+    return mode;
   }
 
-  return "GENERAL";
+  throw new Error("Le classifieur IA de /project-ask a renvoyé un mode invalide.");
 }
 
 function buildProjectAskInput(
@@ -1918,7 +1946,7 @@ export async function askProjectWithAI(
   context: ProjectAiContext,
   question: string,
 ): Promise<string> {
-  const mode = classifyProjectAskMode(question);
+  const mode = await classifyProjectAskMode(context, question);
   const input = buildProjectAskInput(context, question, mode);
   const instructions = buildProjectAskInstructions(mode);
   const schema = getProjectAskSchema(mode);
