@@ -1490,13 +1490,19 @@ async function reviewProjectWithOllama(
 
 type ProjectAskMode = "GENERAL" | "PLANNING" | "FEATURE";
 
+type ProjectAskEvidence = {
+  file: string;
+  quote: string;
+};
+
 type ProjectAskPlanning = {
+  kind: "BUG" | "IMPROVEMENT";
   title: string;
   why_now: string;
   files: string[];
   expected: string;
   success: string;
-  evidence: string[];
+  evidence: ProjectAskEvidence[];
 };
 
 type ProjectAskFeature = {
@@ -1513,14 +1519,36 @@ type ProjectAskGeneral = {
 
 const PROJECT_ASK_PLANNING_SCHEMA = {
   type: "object",
-  required: ["title", "why_now", "files", "expected", "success", "evidence"],
+  required: [
+    "kind",
+    "title",
+    "why_now",
+    "files",
+    "expected",
+    "success",
+    "evidence",
+  ],
   properties: {
+    kind: {
+      type: "string",
+      enum: ["BUG", "IMPROVEMENT"],
+    },
     title: { type: "string" },
     why_now: { type: "string" },
     files: { type: "array", items: { type: "string" } },
     expected: { type: "string" },
     success: { type: "string" },
-    evidence: { type: "array", items: { type: "string" } },
+    evidence: {
+      type: "array",
+      items: {
+        type: "object",
+        required: ["file", "quote"],
+        properties: {
+          file: { type: "string" },
+          quote: { type: "string" },
+        },
+      },
+    },
   },
 } as const;
 
@@ -1642,8 +1670,8 @@ function buildProjectAskInput(
     })),
   };
 
-  if (mode === "GENERAL") {
-    payload.repository_tree = context.repository_tree.slice(0, 120);
+  if (mode === "GENERAL" || mode === "PLANNING") {
+    payload.repository_tree = context.repository_tree.slice(0, 220);
     payload.readme = context.readme;
     payload.package_json = context.package_json;
   }
@@ -1665,6 +1693,7 @@ function buildProjectAskInstructions(mode: ProjectAskMode): string {
     "5. Si une responsabilité a été déplacée entre fichiers, suis les appels jusqu'au fichier qui implémente réellement le comportement.",
     "6. N'invente jamais une fonction, un fichier, une décision ou un besoin.",
     "7. Quand une information n'est pas déterminable, dis-le plutôt que de l'imaginer.",
+    "8. Une recommandation de roadmap n'exige pas qu'un bug soit présent. Tu peux recommander une nouvelle évolution lorsque le lien avec le but du projet et les capacités actuelles est concret.",
     "",
     "CE QUE TU DOIS ÉVITER :",
     "Ne commence pas par 'voici une analyse du jeu', 'core mechanics', 'game overview', 'technical strengths' ou un résumé de l'architecture.",
@@ -1680,21 +1709,34 @@ function buildProjectAskInstructions(mode: ProjectAskMode): string {
       "MODE : PROCHAINE ÉTAPE DE DÉVELOPPEMENT",
       "La question demande ce qu'il faut modifier ensuite dans le jeu.",
       "Tu dois choisir UNE seule modification.",
-      "Ordre de décision : active_tasks pertinentes, puis active_decisions pertinentes, puis état récent, puis code actuel.",
-      "Une tâche active pertinente doit être privilégiée plutôt qu'une nouvelle idée.",
-      "S'il n'existe pas de tâche active pertinente, choisis une amélioration ou extension réellement justifiée par le code actuel.",
+      "Ordre de décision : tâches actives pertinentes → décisions actives → progression récente → but du projet → code actuel.",
+      "Si une tâche active pertinente existe, privilégie-la. Sinon, choisis une seule évolution concrète du gameplay ou d'un système existant.",
+      "Une amélioration de roadmap peut être valide même si le code actuel est cohérent et sans bug évident.",
+      "Pour un BUG, tu dois démontrer une chaîne causale : code actuel → comportement incorrect → conséquence.",
+      "Pour une IMPROVEMENT, tu dois démontrer : capacité actuelle → limite ou opportunité concrète → valeur de l'évolution proposée.",
+      "Les evidence décrivent uniquement l'état ACTUEL du dépôt. Elles doivent expliquer pourquoi la modification est pertinente ; elles ne doivent jamais décrire la modification proposée comme si elle était déjà implémentée.",
+      "Chaque evidence doit contenir un chemin de fichier fourni et un court extrait COPIÉ EXACTEMENT de ce fichier. Le quote doit exister tel quel dans le contenu fourni.",
+      "N'écris jamais dans quote une phrase comme 'Ajout de...' ou une description de la modification : quote doit être du code réel.",
+      "Quand une vérification ou un fallback existe déjà dans le code, considère-le comme une capacité actuelle et ne le repropose pas sous un autre nom.",
+      "Une fonctionnalité nouvelle peut être proposée même sans bug, mais alors why_now doit la présenter comme une évolution de produit/design, pas comme un défaut technique hypothétique.",
+      "Ne présente jamais un événement, système ou besoin métier comme existant ou requis sans preuve dans les fichiers fournis, les tâches actives ou les décisions actives.",
+      "Ne transforme jamais une préférence de design en bug.",
+      "Ne transforme jamais une absence de fonctionnalité en bug sans exigence explicite.",
+      "Ne prétends pas qu'un comportement est absent tant que tu n'as pas inspecté les fichiers concernés présents dans le contexte.",
+      "Le contexte de planning contient les principaux scripts gameplay ensemble : raisonne à travers leurs interactions, pas fichier par fichier isolément.",
       "La proposition doit être concrète, localisable dans le code et testable.",
-      "Ne propose pas une amélioration générique comme 'améliorer le game feel' sans comportement précis.",
-      "Ne prétends pas qu'un comportement est absent sans avoir vérifié la responsabilité réelle dans les fichiers fournis.",
+      "Ne propose pas 'améliorer le game feel', 'optimiser' ou 'ajouter des features' sans cible précise.",
       "La réponse doit permettre de créer immédiatement UNE tâche de développement.",
       "",
       "RENVOIE UNIQUEMENT UN OBJET JSON conforme au schéma fourni.",
+      "kind = BUG uniquement si le défaut est démontré ; sinon IMPROVEMENT.",
       "title = nom court de la modification.",
-      "why_now = raison factuelle liée à l'état actuel.",
-      "files = fichiers réellement concernés ou à vérifier ; n'en invente aucun.",
+      "why_now = raison factuelle liée à l'état actuel ou à la progression du projet.",
+      "files = fichiers réellement concernés ; n'en invente aucun.",
       "expected = résultat observable après la modification.",
       "success = critère de réussite vérifiable.",
-      "evidence = 1 à 4 preuves courtes issues du code actuel ou de Project OS.",
+      "evidence = 1 à 4 objets {file, quote}. file doit être le chemin exact d'un fichier fourni. quote doit être copié exactement depuis ce fichier et servir de preuve directe de la situation actuelle.",
+      "Pour une IMPROVEMENT, les quotes doivent montrer une capacité actuelle, une contrainte actuelle ou un point d'extension concret ; elles ne doivent jamais décrire une modification future.",
     ].join("\n");
   }
 
@@ -1749,6 +1791,7 @@ function parseProjectAskResult(
 
   if (mode === "PLANNING") {
     if (
+      (value.kind !== "BUG" && value.kind !== "IMPROVEMENT") ||
       typeof value.title !== "string" ||
       typeof value.why_now !== "string" ||
       !Array.isArray(value.files) ||
@@ -1760,14 +1803,24 @@ function parseProjectAskResult(
     }
 
     return {
+      kind: value.kind,
       title: value.title,
       why_now: value.why_now,
       files: value.files.filter((item): item is string => typeof item === "string"),
       expected: value.expected,
       success: value.success,
-      evidence: value.evidence.filter(
-        (item): item is string => typeof item === "string",
-      ),
+      evidence: value.evidence
+        .filter(
+          (item): item is Record<string, unknown> =>
+            !!item &&
+            typeof item === "object" &&
+            typeof item.file === "string" &&
+            typeof item.quote === "string",
+        )
+        .map((item) => ({
+          file: item.file,
+          quote: item.quote,
+        })),
     };
   }
 
@@ -1800,6 +1853,48 @@ function parseProjectAskResult(
   return { answer: value.answer };
 }
 
+function validatePlanningResult(
+  context: ProjectAiContext,
+  result: ProjectAskPlanning,
+): string | null {
+  const knownFiles = new Set(context.repository_tree);
+  const selectedFiles = new Set(
+    context.selected_files.map((file) => file.path),
+  );
+
+  for (const file of result.files) {
+    if (!knownFiles.has(file) && !selectedFiles.has(file)) {
+      return "Le fichier '" + file + "' n'existe pas dans le contexte GitHub fourni.";
+    }
+  }
+
+  const evidence = result.evidence;
+
+  if (evidence.length === 0) {
+    return "La proposition ne contient aucune preuve issue du dépôt actuel.";
+  }
+
+  for (const item of evidence) {
+    if (!selectedFiles.has(item.file)) {
+      return "La preuve cite un fichier qui n'a pas été fourni dans le contexte GitHub : " + item.file;
+    }
+
+    const source = context.selected_files.find(
+      (file) => file.path === item.file,
+    );
+
+    if (!source || !item.quote.trim() || !source.content.includes(item.quote)) {
+      return "Une preuve ne correspond pas exactement au contenu actuel de " + item.file + ".";
+    }
+  }
+
+  if (result.kind === "BUG" && evidence.length < 2) {
+    return "Un BUG doit fournir au moins deux extraits de code distincts comme preuves.";
+  }
+
+  return null;
+}
+
 function renderProjectAskResult(
   result: ProjectAskPlanning | ProjectAskFeature | ProjectAskGeneral,
   mode: ProjectAskMode,
@@ -1809,6 +1904,9 @@ function renderProjectAskResult(
 
     return [
       "### " + planning.title,
+      "",
+      "**Type**",
+      planning.kind === "BUG" ? "Bug confirmé" : "Amélioration de développement",
       "",
       "**Pourquoi maintenant**",
       planning.why_now,
@@ -1825,7 +1923,12 @@ function renderProjectAskResult(
       planning.success,
       "",
       ...(planning.evidence.length > 0
-        ? ["**Base factuelle**", planning.evidence.map((item) => "• " + item).join("\n")]
+        ? [
+            "**Base factuelle**",
+            planning.evidence
+              .map((item) => "• " + item.file + " — " + item.quote.replace(/\n/g, " "))
+              .join("\n"),
+          ]
         : []),
     ].join("\n");
   }
@@ -1952,6 +2055,23 @@ export async function askProjectWithAI(
   const schema = getProjectAskSchema(mode);
   const raw = await requestProjectAskStructured(input, instructions, schema);
   const result = parseProjectAskResult(raw, mode);
+
+  if (mode === "PLANNING") {
+    const validationError = validatePlanningResult(
+      context,
+      result as ProjectAskPlanning,
+    );
+
+    if (validationError) {
+      return [
+        "### Impossible de justifier une prochaine modification",
+        "",
+        validationError,
+        "",
+        "Le contexte actuel ne fournit pas une preuve suffisante pour transformer cette proposition en tâche sans spéculer.",
+      ].join("\n");
+    }
+  }
 
   return renderProjectAskResult(result, mode);
 }
