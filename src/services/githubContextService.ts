@@ -48,6 +48,12 @@ export type GithubContextFile = {
   content: string;
 };
 
+export type GithubProjectDocument = {
+  path: string;
+  kind: "JOURNAL_DESIGN" | "JOURNAL_AUDIT" | "PROJECT_DOCUMENT";
+  content: string;
+};
+
 export type GithubRepositoryContext = {
   project?: {
     name: string;
@@ -68,15 +74,17 @@ export type GithubRepositoryContext = {
   };
   repository_tree: string[];
   selected_files: GithubContextFile[];
+  project_documents: GithubProjectDocument[];
   readme: string | null;
   package_json: GithubPackageJson | null;
 };
 
 const MAX_TREE_ENTRIES = 250;
-const MAX_SELECTED_FILES = 16;
+const MAX_SELECTED_FILES = 12;
 const MAX_FILE_CHARS = 8000;
-const MAX_PLANNING_CODE_FILE_CHARS = 18000;
-const MAX_TOTAL_FILE_CHARS = 70000;
+const MAX_PLANNING_CODE_FILE_CHARS = 12000;
+const MAX_TOTAL_FILE_CHARS = 50000;
+const MAX_PROJECT_DOCUMENT_CHARS = 46000;
 
 const CORE_PLANNING_PATHS = [
   "scripts/main.gd",
@@ -408,6 +416,56 @@ function isHistoricalDocumentationPath(path: string): boolean {
   );
 }
 
+function extractProjectJournal(
+  content: string,
+  path: string,
+): GithubProjectDocument[] {
+  const normalized = content.replace(/\r/g, "");
+  const designStart = normalized.indexOf("\n42. ");
+  const auditStart = normalized.indexOf("\n# 52. ");
+
+  if (designStart >= 0 && auditStart > designStart) {
+    const design = normalized.slice(designStart + 1, auditStart).trim();
+    const audit = normalized.slice(auditStart + 1).trim();
+
+    return [
+      {
+        path,
+        kind: "JOURNAL_DESIGN",
+        content: selectHeadTail(design, 20000),
+      },
+      {
+        path,
+        kind: "JOURNAL_AUDIT",
+        content: selectHeadTail(audit, 26000),
+      },
+    ];
+  }
+
+  return [
+    {
+      path,
+      kind: "JOURNAL_AUDIT",
+      content: selectHeadTail(normalized, MAX_PROJECT_DOCUMENT_CHARS),
+    },
+  ];
+}
+
+function selectHeadTail(content: string, maxChars: number): string {
+  if (content.length <= maxChars) {
+    return content;
+  }
+
+  const headChars = Math.floor(maxChars * 0.25);
+  const tailChars = maxChars - headChars;
+
+  return (
+    content.slice(0, headChars) +
+    "\n\n[... section intermédiaire omise ...]\n\n" +
+    content.slice(-tailChars)
+  );
+}
+
 function selectFocusedContent(
   content: string,
   path: string,
@@ -420,6 +478,13 @@ function selectFocusedContent(
 
   const isMarkdown = getExtension(path) === ".md";
   const isHistoricalDoc = isHistoricalDocumentationPath(path);
+
+  if (
+    isDevelopmentPlanningQuestion(focusText) &&
+    CORE_PLANNING_PATHS.includes(path)
+  ) {
+    return selectHeadTail(content, maxChars);
+  }
 
   if (
     isMarkdown &&
@@ -641,6 +706,69 @@ export async function getGithubRepositoryContext(
   const readmePath = readmeEntry?.path ?? null;
   const packageJsonPath = packageJsonEntry?.path ?? null;
 
+  const journalEntries = tree.filter(
+    (entry) =>
+      entry.type === "blob" &&
+      !isIgnoredPath(entry.path) &&
+      (entry.path.toLowerCase().split("/").at(-1) ?? "").includes("journal"),
+  );
+
+  const projectDocumentEntries = tree.filter(
+    (entry) => {
+      if (entry.type !== "blob" || isIgnoredPath(entry.path)) {
+        return false;
+      }
+
+      const fileName = entry.path.toLowerCase().split("/").at(-1) ?? "";
+      return (
+        fileName.includes("roadmap") ||
+        fileName.includes("changelog") ||
+        fileName.includes("design")
+      );
+    },
+  );
+
+  const knowledgePaths = [
+    ...journalEntries.slice(0, 1),
+    ...projectDocumentEntries.slice(0, 3),
+  ].filter(
+    (entry, index, entries) =>
+      entries.findIndex((item) => item.path === entry.path) === index,
+  );
+
+  const projectKnowledgeFiles = await Promise.all(
+    knowledgePaths.map(async (entry) => ({
+      path: entry.path,
+      file: await getOptionalGithubFile<GithubContentFile>(
+        repositoryUrl +
+          "/contents/" +
+          encodeURIComponent(entry.path) +
+          "?ref=" +
+          encodeURIComponent(remote.default_branch),
+      ),
+    })),
+  );
+
+  const projectDocuments = projectKnowledgeFiles.flatMap((item) => {
+    if (!item.file) {
+      return [];
+    }
+
+    const raw = decodeGithubContent(item.file);
+
+    if (item.path.toLowerCase().split("/").at(-1)?.includes("journal")) {
+      return extractProjectJournal(raw, item.path);
+    }
+
+    return [
+      {
+        path: item.path,
+        kind: "PROJECT_DOCUMENT" as const,
+        content: selectHeadTail(raw, 12000),
+      },
+    ];
+  });
+
   const selectedDefinitions = selectContextFiles(
     tree,
     readmePath,
@@ -717,6 +845,7 @@ export async function getGithubRepositoryContext(
       .sort()
       .slice(0, MAX_TREE_ENTRIES),
     selected_files: selectedFiles,
+    project_documents: projectDocuments,
     readme: readmeFile
       ? decodeGithubContent(readmeFile).slice(0, 15000)
       : null,

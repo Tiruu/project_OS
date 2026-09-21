@@ -1488,490 +1488,346 @@ async function reviewProjectWithOllama(
 }
 
 
-type ProjectAskMode = "GENERAL" | "PLANNING" | "FEATURE";
 
-type ProjectAskEvidence = {
-  file: string;
-  quote: string;
+type ProjectCompanionIdea = {
+  title: string;
+  rationale: string;
+  effort: string;
+  timing: "NOW" | "NEXT" | "LATER";
 };
 
-type ProjectAskPlanning = {
-  kind: "BUG" | "IMPROVEMENT";
+type ProjectCompanionRecommendation = {
   title: string;
   why_now: string;
+  effort: string;
+  expected_result: string;
+  success_criteria: string;
   files: string[];
-  expected: string;
-  success: string;
-  evidence: ProjectAskEvidence[];
 };
 
-type ProjectAskFeature = {
-  feature: string;
-  fit: string;
-  capabilities: string;
-  evidence: string[];
-  complexity: string;
-};
-
-type ProjectAskGeneral = {
+type ProjectCompanionResponse = {
   answer: string;
+  current_state: string;
+  recommendation: ProjectCompanionRecommendation;
+  ideas: ProjectCompanionIdea[];
+  watchouts: string[];
+  uncertainties: string[];
+  references: string[];
 };
 
-const PROJECT_ASK_PLANNING_SCHEMA = {
+const PROJECT_COMPANION_SCHEMA = {
   type: "object",
   required: [
-    "kind",
-    "title",
-    "why_now",
-    "files",
-    "expected",
-    "success",
-    "evidence",
+    "answer",
+    "current_state",
+    "recommendation",
+    "ideas",
+    "watchouts",
+    "uncertainties",
+    "references",
   ],
   properties: {
-    kind: {
-      type: "string",
-      enum: ["BUG", "IMPROVEMENT"],
+    answer: { type: "string" },
+    current_state: { type: "string" },
+    recommendation: {
+      type: "object",
+      required: [
+        "title",
+        "why_now",
+        "effort",
+        "expected_result",
+        "success_criteria",
+        "files",
+      ],
+      properties: {
+        title: { type: "string" },
+        why_now: { type: "string" },
+        effort: { type: "string" },
+        expected_result: { type: "string" },
+        success_criteria: { type: "string" },
+        files: { type: "array", items: { type: "string" } },
+      },
     },
-    title: { type: "string" },
-    why_now: { type: "string" },
-    files: { type: "array", items: { type: "string" } },
-    expected: { type: "string" },
-    success: { type: "string" },
-    evidence: {
+    ideas: {
       type: "array",
       items: {
         type: "object",
-        required: ["file", "quote"],
+        required: ["title", "rationale", "effort", "timing"],
         properties: {
-          file: { type: "string" },
-          quote: { type: "string" },
+          title: { type: "string" },
+          rationale: { type: "string" },
+          effort: { type: "string" },
+          timing: {
+            type: "string",
+            enum: ["NOW", "NEXT", "LATER"],
+          },
         },
       },
     },
+    watchouts: { type: "array", items: { type: "string" } },
+    uncertainties: { type: "array", items: { type: "string" } },
+    references: { type: "array", items: { type: "string" } },
   },
 } as const;
 
-const PROJECT_ASK_FEATURE_SCHEMA = {
-  type: "object",
-  required: ["feature", "fit", "capabilities", "evidence", "complexity"],
-  properties: {
-    feature: { type: "string" },
-    fit: { type: "string" },
-    capabilities: { type: "string" },
-    evidence: { type: "array", items: { type: "string" } },
-    complexity: { type: "string" },
-  },
-} as const;
-
-const PROJECT_ASK_GENERAL_SCHEMA = {
-  type: "object",
-  required: ["answer"],
-  properties: {
-    answer: { type: "string" },
-  },
-} as const;
-
-const PROJECT_ASK_MODE_SCHEMA = {
-  type: "object",
-  required: ["mode"],
-  properties: {
-    mode: {
-      type: "string",
-      enum: ["GENERAL", "PLANNING", "FEATURE"],
-    },
-  },
-} as const;
-
-function buildProjectAskModeInput(
+function buildProjectCompanionInput(
   context: ProjectAiContext,
   question: string,
 ): string {
   return JSON.stringify({
-    question,
-    project: {
-      name: context.project_os.project.name,
-      type: context.project_os.project.type,
-      purpose: context.project_os.project.purpose,
-      current_state: context.project_os.project.current_state,
+    USER_QUESTION: question,
+    PROJECT_IDENTITY: {
+      repository: context.repository,
+      project: context.project_os.project,
     },
-    active_tasks: context.project_os.active_tasks,
-    active_decisions: context.project_os.active_decisions,
-  });
-}
-
-function buildProjectAskModeInstructions(): string {
-  return [
-    "Tu es le routeur d'intention de Project OS.",
-    "Ta seule mission est de déterminer dans quel mode /project-ask doit traiter la question.",
-    "",
-    "Modes autorisés :",
-    "GENERAL = question générale, explication, diagnostic, compréhension ou demande qui ne demande pas explicitement de choisir la prochaine étape ni d'imaginer une nouvelle fonctionnalité.",
-    "PLANNING = l'utilisateur demande quoi faire ensuite, la prochaine étape, la prochaine modification, la suite du développement, ou quelle tâche de développement prioriser.",
-    "FEATURE = l'utilisateur demande d'imaginer, proposer ou choisir une nouvelle fonctionnalité à ajouter au jeu.",
-    "",
-    "Comprends le sens de la question, pas des mots-clés exacts.",
-    "Les accents, fautes de frappe, synonymes, formulations naturelles et ordre des mots ne doivent jamais changer l'intention lorsqu'elle reste compréhensible.",
-    "Par exemple, 'quelle est la suite du développement ?', 'on fait quoi ensuite ?', 'tu me conseilles quoi pour continuer le jeu ?' et 'quelle prochaine modif ?' sont PLANNING.",
-    "Une question qui parle du développement sans demander la prochaine étape n'est pas automatiquement PLANNING.",
-    "Une question qui demande une idée de nouvelle mécanique ou fonctionnalité est FEATURE.",
-    "En cas d'ambiguïté réelle, choisis GENERAL.",
-    "",
-    "Ne réponds pas à la question. Retourne uniquement un objet JSON conforme au schéma fourni.",
-  ].join("\\n");
-}
-
-async function classifyProjectAskMode(
-  context: ProjectAiContext,
-  question: string,
-): Promise<ProjectAskMode> {
-  const raw = await requestProjectAskStructured(
-    buildProjectAskModeInput(context, question),
-    buildProjectAskModeInstructions(),
-    PROJECT_ASK_MODE_SCHEMA,
-  );
-
-  const parsed = parseJsonObject(raw);
-
-  if (!parsed || typeof parsed !== "object") {
-    throw new Error("Le classifieur IA de /project-ask n'a pas renvoyé de JSON exploitable.");
-  }
-
-  const mode = (parsed as Record<string, unknown>).mode;
-
-  if (mode === "GENERAL" || mode === "PLANNING" || mode === "FEATURE") {
-    return mode;
-  }
-
-  throw new Error("Le classifieur IA de /project-ask a renvoyé un mode invalide.");
-}
-
-function buildProjectAskInput(
-  context: ProjectAiContext,
-  question: string,
-  mode: ProjectAskMode,
-): string {
-  const payload: Record<string, unknown> = {
-    question,
-    mode,
-    project: context.project_os.project,
-    active_tasks: context.project_os.active_tasks,
-    active_decisions: context.project_os.active_decisions,
-    recent_activities: context.project_os.recent_activities.slice(0, 12),
-    repository: {
-      name: context.repository.name,
-      full_name: context.repository.full_name,
-      default_branch: context.repository.default_branch,
+    CURRENT_PROJECT_MANAGEMENT: {
+      active_tasks: context.project_os.active_tasks,
+      recent_tasks_and_history: context.project_os.tasks,
+      active_decisions: context.project_os.active_decisions,
+      recent_decisions: context.project_os.decisions,
+      recent_non_ai_activities: context.project_os.recent_activities,
     },
-    selected_files: context.selected_files.map((file) => ({
+    PROJECT_DOCUMENTATION: context.project_documents,
+    REPOSITORY_OVERVIEW: {
+      tree: context.repository_tree,
+      readme: context.readme,
+      package_json: context.package_json,
+    },
+    CODE_CONTEXT: context.selected_files.map((file) => ({
       path: file.path,
       reason: file.reason,
       content: file.content,
     })),
-  };
-
-  if (mode === "GENERAL" || mode === "PLANNING") {
-    payload.repository_tree = context.repository_tree.slice(0, 220);
-    payload.readme = context.readme;
-    payload.package_json = context.package_json;
-  }
-
-  return JSON.stringify(payload);
+  });
 }
 
-function buildProjectAskInstructions(mode: ProjectAskMode): string {
-  const common = [
-    "Tu es l'assistant de décision de Project OS.",
-    "Ta mission est de répondre à UNE question précise sur un projet.",
-    "Tu ne dois pas transformer la question en audit général du projet.",
-    "",
-    "SOURCE DE VÉRITÉ :",
-    "1. Le contenu actuel des fichiers fournis est la preuve principale du comportement du code.",
-    "2. Les données Project OS décrivent l'état enregistré : seules active_tasks et active_decisions sont des éléments actuels.",
-    "3. Les activités AI_REVIEW, AI_TASK_CREATED et AI_TASK_IGNORED sont historiques et ne servent jamais de preuve de l'état actuel.",
-    "4. Les documents peuvent être obsolètes. Ils servent à comprendre le contexte, pas à contredire le code actuel sans preuve.",
-    "5. Si une responsabilité a été déplacée entre fichiers, suis les appels jusqu'au fichier qui implémente réellement le comportement.",
-    "6. N'invente jamais une fonction, un fichier, une décision ou un besoin.",
-    "7. Quand une information n'est pas déterminable, dis-le plutôt que de l'imaginer.",
-    "8. Une recommandation de roadmap n'exige pas qu'un bug soit présent. Tu peux recommander une nouvelle évolution lorsque le lien avec le but du projet et les capacités actuelles est concret.",
-    "",
-    "CE QUE TU DOIS ÉVITER :",
-    "Ne commence pas par 'voici une analyse du jeu', 'core mechanics', 'game overview', 'technical strengths' ou un résumé de l'architecture.",
-    "Ne réponds pas à une question différente de celle contenue dans le champ question.",
-    "Ne transforme pas une absence de fonctionnalité en problème simplement parce qu'elle est absente.",
-    "Ne propose pas plusieurs options de roadmap quand une seule réponse est demandée.",
-  ];
-
-  if (mode === "PLANNING") {
-    return [
-      ...common,
-      "",
-      "MODE : PROCHAINE ÉTAPE DE DÉVELOPPEMENT",
-      "La question demande ce qu'il faut modifier ensuite dans le jeu.",
-      "Tu dois choisir UNE seule modification.",
-      "Ordre de décision : tâches actives pertinentes → décisions actives → progression récente → but du projet → code actuel.",
-      "Si une tâche active pertinente existe, privilégie-la. Sinon, choisis une seule évolution concrète du gameplay ou d'un système existant.",
-      "Une amélioration de roadmap peut être valide même si le code actuel est cohérent et sans bug évident.",
-      "Pour un BUG, tu dois démontrer une chaîne causale : code actuel → comportement incorrect → conséquence.",
-      "Pour une IMPROVEMENT, tu dois démontrer : capacité actuelle → limite ou opportunité concrète → valeur de l'évolution proposée.",
-      "Les evidence décrivent uniquement l'état ACTUEL du dépôt. Elles doivent expliquer pourquoi la modification est pertinente ; elles ne doivent jamais décrire la modification proposée comme si elle était déjà implémentée.",
-      "Chaque evidence doit contenir un chemin de fichier fourni et un court extrait COPIÉ EXACTEMENT de ce fichier. Le quote doit exister tel quel dans le contenu fourni.",
-      "N'écris jamais dans quote une phrase comme 'Ajout de...' ou une description de la modification : quote doit être du code réel.",
-      "Quand une vérification ou un fallback existe déjà dans le code, considère-le comme une capacité actuelle et ne le repropose pas sous un autre nom.",
-      "Une fonctionnalité nouvelle peut être proposée même sans bug, mais alors why_now doit la présenter comme une évolution de produit/design, pas comme un défaut technique hypothétique.",
-      "Ne présente jamais un événement, système ou besoin métier comme existant ou requis sans preuve dans les fichiers fournis, les tâches actives ou les décisions actives.",
-      "Ne transforme jamais une préférence de design en bug.",
-      "Ne transforme jamais une absence de fonctionnalité en bug sans exigence explicite.",
-      "Ne prétends pas qu'un comportement est absent tant que tu n'as pas inspecté les fichiers concernés présents dans le contexte.",
-      "Le contexte de planning contient les principaux scripts gameplay ensemble : raisonne à travers leurs interactions, pas fichier par fichier isolément.",
-      "La proposition doit être concrète, localisable dans le code et testable.",
-      "Ne propose pas 'améliorer le game feel', 'optimiser' ou 'ajouter des features' sans cible précise.",
-      "La réponse doit permettre de créer immédiatement UNE tâche de développement.",
-      "",
-      "RENVOIE UNIQUEMENT UN OBJET JSON conforme au schéma fourni.",
-      "kind = BUG uniquement si le défaut est démontré ; sinon IMPROVEMENT.",
-      "title = nom court de la modification.",
-      "why_now = raison factuelle liée à l'état actuel ou à la progression du projet.",
-      "files = fichiers réellement concernés ; n'en invente aucun.",
-      "expected = résultat observable après la modification.",
-      "success = critère de réussite vérifiable.",
-      "evidence = 1 à 4 objets {file, quote}. file doit être le chemin exact d'un fichier fourni. quote doit être copié exactement depuis ce fichier et servir de preuve directe de la situation actuelle.",
-      "Pour une IMPROVEMENT, les quotes doivent montrer une capacité actuelle, une contrainte actuelle ou un point d'extension concret ; elles ne doivent jamais décrire une modification future.",
-    ].join("\n");
-  }
-
-  if (mode === "FEATURE") {
-    return [
-      ...common,
-      "",
-      "MODE : IDÉATION DE FONCTIONNALITÉ",
-      "La question demande UNE fonctionnalité à ajouter au jeu.",
-      "Choisis une fonctionnalité nouvelle qui s'intègre aux capacités actuellement observables.",
-      "Ne propose pas une fonctionnalité déjà présente sous un autre nom.",
-      "Ne déduis pas un besoin utilisateur non observé ; explique plutôt la valeur potentielle dans le workflow actuel.",
-      "Vérifie le code fourni avant d'affirmer qu'une capacité n'existe pas.",
-      "",
-      "RENVOIE UNIQUEMENT UN OBJET JSON conforme au schéma fourni.",
-      "feature = nom de la fonctionnalité.",
-      "fit = pourquoi elle s'intègre au jeu existant.",
-      "capabilities = ce qu'elle permettrait concrètement.",
-      "evidence = 1 à 4 preuves courtes.",
-      "complexity = faible, moyenne ou élevée, avec une justification très courte.",
-    ].join("\n");
-  }
-
+function buildProjectCompanionInstructions(): string {
   return [
-    ...common,
+    "Tu es le compagnon de bord permanent d'un projet de développement.",
+    "Tu dois comprendre le projet comme un ensemble cohérent, pas comme une liste de fichiers.",
     "",
-    "MODE : RÉPONSE DIRECTE",
-    "Réponds directement à la question. N'ajoute un état des lieux du projet que si la question le demande.",
+    "Ta mission : répondre à la question de l'utilisateur ET lui apporter la vision d'ensemble qu'un lead technique/design expérimenté aurait en regardant ce projet.",
     "",
-    "RENVOIE UNIQUEMENT UN OBJET JSON conforme au schéma fourni.",
-    "answer = réponse complète, concise et factuelle à la question.",
+    "SOURCES ET PRIORITÉ :",
+    "1. USER_QUESTION est la question exacte à laquelle tu dois répondre.",
+    "2. JOURNAL_AUDIT est la photographie technique la plus récente du projet et prime sur les descriptions historiques lorsqu'elles se contredisent avec le code.",
+    "3. JOURNAL_DESIGN décrit les intentions, priorités et pistes de roadmap ; il ne prouve pas qu'une idée est implémentée.",
+    "4. active_tasks et active_decisions décrivent les engagements actuels du projet.",
+    "5. CODE_CONTEXT montre ce qui est réellement présent dans les fichiers fournis.",
+    "6. REPOSITORY_OVERVIEW donne la vision plus large du dépôt.",
+    "7. Les activités récentes sont un historique utile, pas une preuve qu'un comportement est encore présent.",
+    "",
+    "RÈGLE CENTRALE : distingue toujours quatre états :",
+    "- IMPLEMENTÉ = observable dans le code actuel.",
+    "- DÉCIDÉ = choisi dans Project OS mais pas forcément implémenté.",
+    "- PLANIFIÉ / IDÉE = présent dans le journal ou une réflexion mais pas validé comme travail actuel.",
+    "- INCONNU = impossible à confirmer avec le contexte fourni.",
+    "",
+    "Ne transforme jamais une idée du journal en fonctionnalité existante.",
+    "Ne transforme jamais l'absence d'un fichier sélectionné en absence de fonctionnalité dans tout le dépôt.",
+    "Ne cherche pas artificiellement un bug pour avoir quelque chose à proposer.",
+    "Ne propose pas de reconstruire un système déjà présent sans symptôme ou raison concrète.",
+    "",
+    "QUAND L'UTILISATEUR DEMANDE 'QUOI FAIRE ENSUITE' :",
+    "Commence par identifier la phase réelle du projet.",
+    "Confronte le code actuel aux priorités du journal et aux décisions/tâches actives.",
+    "Choisis ensuite une recommandation principale qui fait avancer le projet dans la bonne direction.",
+    "La recommandation peut être technique, gameplay, UX, audio, visuelle, contenu, équilibrage, production ou préparation de release.",
+    "Ne la limite pas au fichier qui semble le plus facile à modifier.",
+    "",
+    "QUAND TU DONNES DES IDÉES :",
+    "Sépare clairement la recommandation immédiate des idées futures.",
+    "Évite les systèmes génériques ou à la mode qui ne servent pas le projet.",
+    "Pour chaque idée, explique pourquoi elle appartient à ce projet précisément.",
+    "",
+    "ESTIMATIONS :",
+    "Donne une estimation de travail honnête et grossière, par exemple '1-2 h', 'une demi-journée', '1-2 jours'.",
+    "L'estimation doit inclure les hypothèses importantes et ne doit pas être présentée comme une mesure précise.",
+    "",
+    "ANALYSE DU CODE :",
+    "Suis les responsabilités entre les fichiers avant de conclure.",
+    "Pour un bug, explique la chaîne causale code → comportement → conséquence.",
+    "Pour une amélioration, explique capacité actuelle → limite/opportunité → bénéfice de l'évolution.",
+    "Si le code et le journal se contredisent, signale la contradiction au lieu de choisir silencieusement une version.",
+    "",
+    "STYLE DE RÉPONSE :",
+    "Réponds comme un compagnon de développement : direct, concret, critique quand nécessaire.",
+    "Ne récite pas le dépôt.",
+    "Ne produit pas un audit générique si la question est précise.",
+    "Mais ne te prive pas d'utiliser la vision d'ensemble du projet pour améliorer la réponse.",
+    "Tu peux dire explicitement 'je ne ferais pas X maintenant' avec une justification technique ou design.",
+    "",
+    "FORMAT :",
+    "Retourne uniquement un JSON valide conforme au schéma.",
+    "answer doit être la réponse naturelle à l'utilisateur, concise mais substantielle.",
+    "current_state résume où en est réellement le projet.",
+    "recommendation est UNE seule prochaine action principale.",
+    "ideas contient 0 à 4 idées complémentaires.",
+    "watchouts contient 0 à 4 risques ou pièges importants.",
+    "uncertainties contient uniquement les inconnues pertinentes.",
+    "references contient les chemins de fichiers, noms de documents ou sections du journal réellement utilisés.",
   ].join("\n");
 }
 
-function getProjectAskSchema(mode: ProjectAskMode) {
-  if (mode === "PLANNING") return PROJECT_ASK_PLANNING_SCHEMA;
-  if (mode === "FEATURE") return PROJECT_ASK_FEATURE_SCHEMA;
-  return PROJECT_ASK_GENERAL_SCHEMA;
-}
-
-function parseProjectAskResult(
-  content: string,
-  mode: ProjectAskMode,
-): ProjectAskPlanning | ProjectAskFeature | ProjectAskGeneral {
+function parseProjectCompanionResponse(content: string): ProjectCompanionResponse {
   const parsed = parseJsonObject(content);
 
   if (!parsed || typeof parsed !== "object") {
-    throw new Error("La réponse IA de /project-ask n'est pas un JSON exploitable.");
+    throw new Error("La réponse IA du compagnon de projet n'est pas un JSON exploitable.");
   }
 
   const value = parsed as Record<string, unknown>;
+  const recommendation = value.recommendation;
 
-  if (mode === "PLANNING") {
-    if (
-      (value.kind !== "BUG" && value.kind !== "IMPROVEMENT") ||
-      typeof value.title !== "string" ||
-      typeof value.why_now !== "string" ||
-      !Array.isArray(value.files) ||
-      typeof value.expected !== "string" ||
-      typeof value.success !== "string" ||
-      !Array.isArray(value.evidence)
-    ) {
-      throw new Error("La réponse IA planning n'est pas conforme.");
-    }
-
-    return {
-      kind: value.kind,
-      title: value.title,
-      why_now: value.why_now,
-      files: value.files.filter((item): item is string => typeof item === "string"),
-      expected: value.expected,
-      success: value.success,
-      evidence: value.evidence
-        .filter(
-          (item): item is { file: string; quote: string } =>
-            !!item &&
-            typeof item === "object" &&
-            typeof item.file === "string" &&
-            typeof item.quote === "string",
-        )
-        .map((item) => ({
-          file: item.file,
-          quote: item.quote,
-        })),
-    };
+  if (
+    typeof value.answer !== "string" ||
+    typeof value.current_state !== "string" ||
+    !recommendation ||
+    typeof recommendation !== "object" ||
+    typeof (recommendation as Record<string, unknown>).title !== "string" ||
+    typeof (recommendation as Record<string, unknown>).why_now !== "string" ||
+    typeof (recommendation as Record<string, unknown>).effort !== "string" ||
+    typeof (recommendation as Record<string, unknown>).expected_result !== "string" ||
+    typeof (recommendation as Record<string, unknown>).success_criteria !== "string" ||
+    !Array.isArray((recommendation as Record<string, unknown>).files) ||
+    !Array.isArray(value.ideas) ||
+    !Array.isArray(value.watchouts) ||
+    !Array.isArray(value.uncertainties) ||
+    !Array.isArray(value.references)
+  ) {
+    throw new Error("La réponse IA du compagnon de projet n'est pas conforme.");
   }
 
-  if (mode === "FEATURE") {
-    if (
-      typeof value.feature !== "string" ||
-      typeof value.fit !== "string" ||
-      typeof value.capabilities !== "string" ||
-      !Array.isArray(value.evidence) ||
-      typeof value.complexity !== "string"
-    ) {
-      throw new Error("La réponse IA feature n'est pas conforme.");
-    }
+  const rawRecommendation = recommendation as Record<string, unknown>;
 
-    return {
-      feature: value.feature,
-      fit: value.fit,
-      capabilities: value.capabilities,
-      evidence: value.evidence.filter(
+  return {
+    answer: value.answer,
+    current_state: value.current_state,
+    recommendation: {
+      title: rawRecommendation.title as string,
+      why_now: rawRecommendation.why_now as string,
+      effort: rawRecommendation.effort as string,
+      expected_result: rawRecommendation.expected_result as string,
+      success_criteria: rawRecommendation.success_criteria as string,
+      files: rawRecommendation.files.filter(
         (item): item is string => typeof item === "string",
       ),
-      complexity: value.complexity,
-    };
-  }
-
-  if (typeof value.answer !== "string") {
-    throw new Error("La réponse IA générale n'est pas conforme.");
-  }
-
-  return { answer: value.answer };
-}
-
-function normalizeCodeEvidence(value: string): string {
-  return value
-    .replace(/\r/g, "")
-    .replace(/\s+/g, " ")
-    .trim();
-}
-
-function validatePlanningResult(
-  context: ProjectAiContext,
-  result: ProjectAskPlanning,
-): string | null {
-  const knownFiles = new Set(context.repository_tree);
-  const selectedFiles = new Set(
-    context.selected_files.map((file) => file.path),
-  );
-
-  for (const file of result.files) {
-    if (!knownFiles.has(file) && !selectedFiles.has(file)) {
-      return "Le fichier '" + file + "' n'existe pas dans le contexte GitHub fourni.";
-    }
-  }
-
-  const evidence = result.evidence;
-
-  if (evidence.length === 0) {
-    return "La proposition ne contient aucune preuve issue du dépôt actuel.";
-  }
-
-  for (const item of evidence) {
-    if (!selectedFiles.has(item.file)) {
-      return "La preuve cite un fichier qui n'a pas été fourni dans le contexte GitHub : " + item.file;
-    }
-
-    const source = context.selected_files.find(
-      (file) => file.path === item.file,
-    );
-
-    if (
-      !source ||
-      !item.quote.trim() ||
-      !normalizeCodeEvidence(source.content).includes(
-        normalizeCodeEvidence(item.quote),
+    },
+    ideas: value.ideas
+      .filter(
+        (item): item is Record<string, unknown> =>
+          !!item &&
+          typeof item === "object" &&
+          typeof item.title === "string" &&
+          typeof item.rationale === "string" &&
+          typeof item.effort === "string" &&
+          (item.timing === "NOW" ||
+            item.timing === "NEXT" ||
+            item.timing === "LATER"),
       )
-    ) {
-      return "Une preuve ne correspond pas au contenu actuel de " + item.file + ".";
-    }
-  }
-
-  if (result.kind === "BUG" && evidence.length < 2) {
-    return "Un BUG doit fournir au moins deux extraits de code distincts comme preuves.";
-  }
-
-  return null;
+      .map((item) => ({
+        title: item.title as string,
+        rationale: item.rationale as string,
+        effort: item.effort as string,
+        timing: item.timing as "NOW" | "NEXT" | "LATER",
+      }))
+      .slice(0, 4),
+    watchouts: value.watchouts.filter(
+      (item): item is string => typeof item === "string",
+    ).slice(0, 4),
+    uncertainties: value.uncertainties.filter(
+      (item): item is string => typeof item === "string",
+    ).slice(0, 6),
+    references: value.references.filter(
+      (item): item is string => typeof item === "string",
+    ).slice(0, 10),
+  };
 }
 
-function renderProjectAskResult(
-  result: ProjectAskPlanning | ProjectAskFeature | ProjectAskGeneral,
-  mode: ProjectAskMode,
+function renderProjectCompanionResponse(
+  result: ProjectCompanionResponse,
 ): string {
-  if (mode === "PLANNING") {
-    const planning = result as ProjectAskPlanning;
-
-    return [
-      "### " + planning.title,
-      "",
-      "**Type**",
-      planning.kind === "BUG" ? "Bug confirmé" : "Amélioration de développement",
-      "",
-      "**Pourquoi maintenant**",
-      planning.why_now,
-      "",
-      "**Fichiers concernés**",
-      planning.files.length > 0
-        ? planning.files.map((file) => "• " + file).join("\n")
-        : "À déterminer à partir du code local.",
-      "",
-      "**Résultat attendu**",
-      planning.expected,
-      "",
-      "**Critère de réussite**",
-      planning.success,
-      "",
-      ...(planning.evidence.length > 0
-        ? [
-            "**Base factuelle**",
-            planning.evidence
-              .map((item) => "• " + item.file + " — " + item.quote.replace(/\n/g, " "))
-              .join("\n"),
-          ]
-        : []),
-    ].join("\n");
-  }
-
-  if (mode === "FEATURE") {
-    const feature = result as ProjectAskFeature;
-
-    return [
-      "### " + feature.feature,
-      "",
-      "**Pourquoi elle s'intègre au jeu**",
-      feature.fit,
-      "",
-      "**Ce qu'elle permettrait de faire**",
-      feature.capabilities,
-      "",
-      "**Preuves dans le code actuel**",
-      feature.evidence.length > 0
-        ? feature.evidence.map((item) => "• " + item).join("\n")
-        : "Aucune preuve directe suffisante dans le contexte fourni.",
-      "",
-      "**Complexité estimée**",
-      feature.complexity,
-    ].join("\n");
-  }
-
-  return (result as ProjectAskGeneral).answer;
+  return [
+    "## Compagnon de bord",
+    "",
+    result.answer,
+    "",
+    "### Où en est le projet",
+    result.current_state,
+    "",
+    "### Ma recommandation",
+    "**" + result.recommendation.title + "**",
+    "",
+    result.recommendation.why_now,
+    "",
+    "**Effort estimé :** " + result.recommendation.effort,
+    "",
+    "**Résultat attendu :** " + result.recommendation.expected_result,
+    "",
+    "**Critère de réussite :** " + result.recommendation.success_criteria,
+    ...(result.recommendation.files.length > 0
+      ? [
+          "",
+          "**Fichiers concernés :**",
+          ...result.recommendation.files.map((file) => "• " + file),
+        ]
+      : []),
+    ...(result.ideas.length > 0
+      ? [
+          "",
+          "### Idées à garder en réserve",
+          ...result.ideas.map(
+            (idea) =>
+              "• **" +
+              idea.title +
+              "** [" +
+              idea.timing +
+              " — " +
+              idea.effort +
+              "] — " +
+              idea.rationale,
+          ),
+        ]
+      : []),
+    ...(result.watchouts.length > 0
+      ? [
+          "",
+          "### Points de vigilance",
+          ...result.watchouts.map((item) => "• " + item),
+        ]
+      : []),
+    ...(result.uncertainties.length > 0
+      ? [
+          "",
+          "### Incertitudes",
+          ...result.uncertainties.map((item) => "• " + item),
+        ]
+      : []),
+    ...(result.references.length > 0
+      ? [
+          "",
+          "### Sources consultées",
+          ...result.references.map((item) => "• " + item),
+        ]
+      : []),
+  ].join("\n");
 }
 
-async function requestProjectAskStructured(
+async function requestProjectCompanion(
+  context: ProjectAiContext,
+  question: string,
+): Promise<string> {
+  const input = buildProjectCompanionInput(context, question);
+  const instructions = buildProjectCompanionInstructions();
+
+  return requestProjectAskStructured(
+    input,
+    instructions,
+    PROJECT_COMPANION_SCHEMA,
+  );
+}
+
+function requestProjectAskStructured(
   input: string,
   instructions: string,
   schema: object,
@@ -1981,36 +1837,39 @@ async function requestProjectAskStructured(
   if (provider === "gemini") {
     const config = getGeminiConfig();
 
-    try {
-      const response = await callGemini(
-        config.apiKey,
-        config.model,
-        config.thinkingLevel,
-        input,
-        instructions,
-        schema,
-      );
+    return callGemini(
+      config.apiKey,
+      config.model,
+      config.thinkingLevel,
+      input,
+      instructions,
+      schema,
+    )
+      .then((response) => {
+        const content = getGeminiContent(response);
 
-      const content = getGeminiContent(response);
-      if (content) {
+        if (!content) {
+          throw new Error("Gemini a répondu sans contenu exploitable.");
+        }
+
         return content;
-      }
+      })
+      .catch(async (error) => {
+        if (
+          error instanceof Error &&
+          !(
+            error.message.startsWith("GEMINI_RATE_LIMIT:") ||
+            error.message.startsWith("GEMINI_SERVICE_UNAVAILABLE:")
+          )
+        ) {
+          throw error;
+        }
 
-      throw new Error("Gemini a répondu sans contenu exploitable.");
-    } catch (error) {
-      if (
-        error instanceof Error &&
-        (
-          error.message.startsWith("GEMINI_RATE_LIMIT:") ||
-          error.message.startsWith("GEMINI_SERVICE_UNAVAILABLE:") ||
-          error.message.includes("sans contenu exploitable")
-        )
-      ) {
         const fallback = getOllamaConfig();
         const response = await callOllama(fallback.url, {
           model: fallback.model,
           stream: false,
-          think: false,
+          think: fallback.think,
           format: schema,
           messages: [
             { role: "system", content: instructions },
@@ -2022,24 +1881,23 @@ async function requestProjectAskStructured(
         });
 
         const content = response.message?.content?.trim() ?? "";
-        if (content) {
-          return content;
+
+        if (!content) {
+          throw new Error(
+            "Gemini est indisponible et le modèle de secours Ollama n'a renvoyé aucun contenu exploitable.",
+          );
         }
 
-        throw new Error(
-          "Gemini est indisponible et le modèle de secours Ollama n'a renvoyé aucun contenu exploitable.",
-        );
-      }
-
-      throw error;
-    }
+        return content;
+      });
   }
 
   const config = getOllamaConfig();
-  const response = await callOllama(config.url, {
+
+  return callOllama(config.url, {
     model: config.model,
     stream: false,
-    think: false,
+    think: config.think,
     format: schema,
     messages: [
       { role: "system", content: instructions },
@@ -2048,45 +1906,25 @@ async function requestProjectAskStructured(
     options: {
       temperature: 0,
     },
+  }).then((response) => {
+    const content = response.message?.content?.trim() ?? "";
+
+    if (!content) {
+      throw new Error("Ollama n'a renvoyé aucun contenu exploitable.");
+    }
+
+    return content;
   });
-
-  const content = response.message?.content?.trim() ?? "";
-  if (!content) {
-    throw new Error("Ollama n'a renvoyé aucun contenu exploitable.");
-  }
-
-  return content;
 }
 
 export async function askProjectWithAI(
   context: ProjectAiContext,
   question: string,
 ): Promise<string> {
-  const mode = await classifyProjectAskMode(context, question);
-  const input = buildProjectAskInput(context, question, mode);
-  const instructions = buildProjectAskInstructions(mode);
-  const schema = getProjectAskSchema(mode);
-  const raw = await requestProjectAskStructured(input, instructions, schema);
-  const result = parseProjectAskResult(raw, mode);
-
-  if (mode === "PLANNING") {
-    const validationError = validatePlanningResult(
-      context,
-      result as ProjectAskPlanning,
-    );
-
-    if (validationError) {
-      return [
-        "### Impossible de justifier une prochaine modification",
-        "",
-        validationError,
-        "",
-        "Le contexte actuel ne fournit pas une preuve suffisante pour transformer cette proposition en tâche sans spéculer.",
-      ].join("\n");
-    }
-  }
-
-  return renderProjectAskResult(result, mode);
+  const raw = await requestProjectCompanion(context, question);
+  return renderProjectCompanionResponse(
+    parseProjectCompanionResponse(raw),
+  );
 }
 
 export async function reviewProjectWithAI(
