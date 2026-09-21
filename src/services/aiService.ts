@@ -125,25 +125,6 @@ function getOllamaConfig(): {
 function getAiProvider(): AiProvider {
   const provider = process.env.AI_PROVIDER?.trim().toLowerCase();
 
-  if (provider === "cloudflare") {
-    const input = buildCompactAiInput(context);
-    const instructions = buildInstructions();
-    const content = await requestCloudflareStructured(
-      input,
-      instructions,
-      AI_REVIEW_JSON_SCHEMA,
-    );
-    const review = tryParseAiReview(content, context);
-
-    if (!review) {
-      throw new Error(
-        "Cloudflare Workers AI a renvoyé un JSON de review inexploitable.",
-      );
-    }
-
-    return review;
-  }
-
   if (provider === "gemini") {
     return "gemini";
   }
@@ -3521,6 +3502,25 @@ export async function reviewProjectWithAI(
   context: ProjectAiContext,
 ): Promise<AiReview> {
   const provider = getAiProvider();
+
+  if (provider === "cloudflare") {
+    const input = buildCompactAiInput(context);
+    const instructions = buildInstructions();
+    const content = await requestCloudflareStructured(
+      input,
+      instructions,
+      AI_REVIEW_JSON_SCHEMA,
+    );
+    const review = tryParseAiReview(content, context);
+
+    if (!review) {
+      throw new Error(
+        "Cloudflare Workers AI a renvoyé un JSON de review inexploitable.",
+      );
+    }
+
+    return review;
+  }
 
   if (provider === "gemini") {
     try {
