@@ -1836,7 +1836,8 @@ function parseProjectAskDiagnosis(
   );
   const confidence = Math.max(0, Math.min(1, value.confidence));
 
-  let status = value.status;
+  const parsedStatus = value.status as ProjectAskDiagnosisStatus;
+  let status: ProjectAskDiagnosisStatus = parsedStatus;
 
   if (
     status === "VERIFIED_DEFECT" &&
