@@ -2478,22 +2478,92 @@ function buildProjectCompanionInput(
     return serialized;
   }
 
-  return JSON.stringify({
+  const compactDossier =
+    input.PRIMARY_PROJECT_DOSSIER.current_state_and_priorities
+      .slice(0, 4)
+      .map((repository, repositoryIndex) => ({
+        repository: repository.repository,
+        current_knowledge: repository.current_knowledge
+          .slice(0, repositoryIndex === 0 ? 2 : 1)
+          .map((document) => ({
+            source: document.source,
+            content: compactCompanionText(
+              document.content,
+              repositoryIndex === 0 ? 5_000 : 1_500,
+            ) ?? "",
+          })),
+        core_files: repository.core_files
+          .slice(0, repositoryIndex === 0 ? 4 : 2)
+          .map((file) => ({
+            source: file.source,
+            path: file.path,
+            content:
+              compactCompanionText(
+                file.content,
+                repositoryIndex === 0 ? 2_500 : 1_200,
+              ) ?? "",
+          })),
+      }));
+
+  const compactInput = {
     ...input,
+    PRIMARY_PROJECT_DOSSIER: {
+      ...input.PRIMARY_PROJECT_DOSSIER,
+      current_state_and_priorities: compactDossier,
+    },
     PROJECT_MEMORY: {
       ...input.PROJECT_MEMORY,
-      recent_tasks: input.PROJECT_MEMORY.recent_tasks.slice(0, 6),
-      recent_decisions: input.PROJECT_MEMORY.recent_decisions.slice(0, 8),
-      recent_activities: input.PROJECT_MEMORY.recent_activities.slice(0, 10),
+      recent_tasks: input.PROJECT_MEMORY.recent_tasks.slice(0, 5),
+      recent_decisions: input.PROJECT_MEMORY.recent_decisions.slice(0, 5),
+      recent_activities: input.PROJECT_MEMORY.recent_activities.slice(0, 6),
     },
-    REPOSITORY_OVERVIEW: input.REPOSITORY_OVERVIEW.map(
-      (repository) => ({
+    REPOSITORY_OVERVIEW: input.REPOSITORY_OVERVIEW
+      .slice(0, 4)
+      .map((repository) => ({
         ...repository,
-        repository_tree: repository.repository_tree.slice(0, 40),
-        readme: compactCompanionText(repository.readme, 1_000),
-      }),
-    ),
+        repository_tree: repository.repository_tree.slice(0, 30),
+        readme: compactCompanionText(repository.readme, 700),
+      })),
+  };
+
+  const compactSerialized = JSON.stringify(compactInput);
+
+  if (compactSerialized.length <= MAX_COMPANION_INPUT_CHARS) {
+    return compactSerialized;
+  }
+
+  return JSON.stringify({
+    ...compactInput,
+    PRIMARY_PROJECT_DOSSIER: {
+      ...compactInput.PRIMARY_PROJECT_DOSSIER,
+      current_state_and_priorities:
+        compactInput.PRIMARY_PROJECT_DOSSIER.current_state_and_priorities
+          .slice(0, 3)
+          .map((repository, repositoryIndex) => ({
+            ...repository,
+            current_knowledge: repository.current_knowledge.slice(
+              0,
+              1,
+            ).map((document) => ({
+              ...document,
+              content: compactCompanionText(
+                document.content,
+                repositoryIndex === 0 ? 3_500 : 900,
+              ) ?? "",
+            })),
+            core_files: repository.core_files
+              .slice(0, repositoryIndex === 0 ? 3 : 1)
+              .map((file) => ({
+                ...file,
+                content: compactCompanionText(
+                  file.content,
+                  repositoryIndex === 0 ? 1_800 : 900,
+                ) ?? "",
+              })),
+          })),
+    },
   });
+}
 }
 
 function buildProjectCompanionInstructions(): string {
