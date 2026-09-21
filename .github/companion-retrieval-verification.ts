@@ -260,6 +260,86 @@ if (!journalPresent) {
   throw new Error("Planning retrieval dropped the audit journal.");
 }
 
+const canonicalEvidence = {
+  source: journalSource,
+  excerpt:
+    "P0 — priorité absolue\n30–50 lancers de playtest\n↓\nobserver Safe / Greed / Combo\n↓\nobserver compréhension et plaisir\n↓\ncalibrer",
+};
+
+for (let i = 0; i < 1000; i += 1) {
+  const variants = [
+    "30–50 SESSIONS de test.",
+    "100 playtests.",
+    "Ajoute un shop.",
+    "Refais le système de combo.",
+    "P0 actuelle.",
+    "",
+  ];
+
+  const badPriority = i % 4 === 0;
+  const validRecommendation = {
+    priority_id: badPriority ? "P1" : "P0",
+    title: badPriority ? "P1" : "P0 — priorité absolue",
+    why: "stress",
+    detail: variants[i % variants.length],
+    effort: "1h",
+    timing: "NOW",
+    evidence: [canonicalEvidence],
+  };
+
+  const planningPayload = {
+    answer: variants[(i + 1) % variants.length],
+    project_state:
+      i % 3 === 0 ? "Importé depuis GitHub" : "état inventé",
+    recommendations: [validRecommendation],
+    problems: [],
+    unknowns: [],
+    references: [journalSource],
+  };
+
+  globalThis.fetch = async (_input, init) => {
+    captured = JSON.parse(String(init?.body)) as CapturedRequest;
+
+    return {
+      ok: true,
+      status: 200,
+      async json() {
+        return {
+          message: {
+            content: JSON.stringify(planningPayload),
+          },
+        };
+      },
+      async text() {
+        return "";
+      },
+    } as any;
+  };
+
+  const result = await askProjectWithAI(
+    context,
+    "Quelle est la prochaine étape du développement ?",
+  );
+
+  if (!result.includes("30–50 lancers")) {
+    throw new Error("Stress planning lost canonical P0 at case " + i);
+  }
+
+  if (
+    result.includes("30–50 SESSIONS") ||
+    result.includes("100 playtests") ||
+    result.includes("Importé depuis GitHub") ||
+    result.includes("P1") ||
+    result.includes("~~~text")
+  ) {
+    throw new Error("Stress planning leaked model/internal content at case " + i);
+  }
+
+  if ((captured?.messages?.find((m) => m.role === "user")?.content?.length ?? 0) > 60_000) {
+    throw new Error("Stress prompt exceeded 60k at case " + i);
+  }
+}
+
 console.log("RETRIEVAL VERIFICATION PASSED");
 console.log("normal_prompt_chars=" + normalPrompt.length);
 console.log("planning_prompt_chars=" + planningPrompt.length);
