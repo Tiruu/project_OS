@@ -46,6 +46,8 @@ export type GithubContextFile = {
   path: string;
   reason: string;
   content: string;
+  truncated: boolean;
+  total_chars: number;
 };
 
 export type GithubRepositoryContext = {
@@ -75,7 +77,8 @@ export type GithubRepositoryContext = {
 const MAX_TREE_ENTRIES = 250;
 const MAX_SELECTED_FILES = 12;
 const MAX_FILE_CHARS = 8000;
-const MAX_TOTAL_FILE_CHARS = 50000;
+const MAX_DEEP_CODE_FILE_CHARS = 18000;
+const MAX_TOTAL_FILE_CHARS = 70000;
 
 const IGNORED_PATH_PARTS = new Set([
   ".git",
@@ -348,6 +351,18 @@ function scoreContextFile(
     if (getExtension(path) === ".gd") {
       score += 90;
       reason = "Code gameplay actuel";
+
+      const fileName = path.toLowerCase().split("/").at(-1) ?? "";
+
+      if (
+        fileName.includes("controller") ||
+        fileName.includes("manager") ||
+        fileName.includes("rules") ||
+        fileName.startsWith("main.")
+      ) {
+        score += 70;
+        reason = "Code gameplay central";
+      }
     }
 
     if (
@@ -393,6 +408,37 @@ function isHistoricalDocumentationPath(path: string): boolean {
   );
 }
 
+function getContextFileCharBudget(
+  path: string,
+  focusText: string | null,
+): number {
+  if (!isDevelopmentPlanningQuestion(focusText)) {
+    return MAX_FILE_CHARS;
+  }
+
+  const fileName = path.toLowerCase().split("/").at(-1) ?? "";
+  const extension = getExtension(path);
+
+  if (
+    extension === ".gd" &&
+    (
+      fileName.startsWith("main.") ||
+      fileName.includes("controller") ||
+      fileName.includes("manager") ||
+      fileName.includes("rules") ||
+      fileName.includes("game")
+    )
+  ) {
+    return MAX_DEEP_CODE_FILE_CHARS;
+  }
+
+  if (extension === ".gd" || extension === ".ts" || extension === ".tsx" || extension === ".js") {
+    return 12000;
+  }
+
+  return MAX_FILE_CHARS;
+}
+
 function selectFocusedContent(
   content: string,
   path: string,
@@ -421,7 +467,7 @@ function selectFocusedContent(
     const normalizedFocus = focusText
       .toLowerCase()
       .normalize("NFD")
-      .replace(/[\\u0300-\\u036f]/g, "")
+      .replace(/[\u0300-\u036f]/g, "")
       .replace(/[^a-z0-9_./-]+/g, " ")
       .trim();
 
@@ -634,13 +680,14 @@ export async function getGithubRepositoryContext(
       continue;
     }
 
+    const decodedContent = decodeGithubContent(file);
     const availableChars = Math.min(
-      MAX_FILE_CHARS,
+      getContextFileCharBudget(selected.path, focusText),
       MAX_TOTAL_FILE_CHARS - totalChars,
     );
 
     const content = selectFocusedContent(
-      decodeGithubContent(file),
+      decodedContent,
       selected.path,
       focusText,
       availableChars,
@@ -654,6 +701,8 @@ export async function getGithubRepositoryContext(
       path: selected.path,
       reason: selected.reason,
       content,
+      truncated: content.length < decodedContent.length,
+      total_chars: decodedContent.length,
     });
 
     totalChars += content.length;
