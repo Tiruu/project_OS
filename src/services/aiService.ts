@@ -1699,6 +1699,11 @@ function parseProjectCompanionResponse(content: string): ProjectCompanionRespons
   }
 
   const rawRecommendation = recommendation as Record<string, unknown>;
+  const recommendationFiles = Array.isArray(rawRecommendation.files)
+    ? rawRecommendation.files.filter(
+        (item): item is string => typeof item === "string",
+      )
+    : [];
 
   return {
     answer: value.answer,
@@ -1709,9 +1714,7 @@ function parseProjectCompanionResponse(content: string): ProjectCompanionRespons
       effort: rawRecommendation.effort as string,
       expected_result: rawRecommendation.expected_result as string,
       success_criteria: rawRecommendation.success_criteria as string,
-      files: rawRecommendation.files.filter(
-        (item): item is string => typeof item === "string",
-      ),
+      files: recommendationFiles,
     },
     ideas: value.ideas
       .filter(
