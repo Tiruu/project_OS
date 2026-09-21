@@ -2564,7 +2564,6 @@ function buildProjectCompanionInput(
     },
   });
 }
-}
 
 function buildProjectCompanionInstructions(): string {
   return [
