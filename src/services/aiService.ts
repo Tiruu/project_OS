@@ -1599,8 +1599,11 @@ const PROJECT_COMPANION_SCHEMA = {
   },
 } as const;
 
-const MAX_COMPANION_INPUT_CHARS = 150_000;
+const MAX_COMPANION_INPUT_CHARS = 60_000;
 const MAX_REPOSITORIES_IN_CONTEXT = 6;
+const MAX_RETRIEVAL_DOCUMENTS = 4;
+const MAX_RETRIEVAL_FILES = 7;
+const MAX_MEMORY_ITEMS = 8;
 
 function compactCompanionText(
   value: string | null | undefined,
@@ -1817,9 +1820,431 @@ function extractCurrentKnowledge(
   ) ?? "";
 }
 
+const COMPANION_STOP_WORDS = new Set([
+  "avec",
+  "dans",
+  "pour",
+  "quel",
+  "quelle",
+  "quels",
+  "quelles",
+  "faire",
+  "est",
+  "sont",
+  "plus",
+  "moins",
+  "comme",
+  "cette",
+  "cest",
+  "cela",
+  "entre",
+  "depuis",
+  "comment",
+  "pourquoi",
+  "sur",
+  "les",
+  "des",
+  "une",
+  "un",
+  "du",
+  "de",
+  "la",
+  "le",
+  "et",
+  "ou",
+  "au",
+  "aux",
+  "ce",
+  "ça",
+  "que",
+  "qui",
+  "où",
+  "a",
+  "as",
+  "on",
+  "je",
+  "tu",
+  "i",
+  "the",
+  "and",
+  "for",
+  "with",
+  "what",
+  "why",
+  "how",
+  "next",
+  "step",
+  "task",
+  "do",
+  "is",
+  "are",
+  "this",
+  "that",
+  "from",
+  "to",
+  "of",
+  "in",
+  "on",
+  "my",
+  "your",
+]);
+
+function normalizeCompanionSearchText(value: string): string {
+  return value
+    .toLowerCase()
+    .normalize("NFD")
+    .replace(/\p{Diacritic}/gu, "")
+    .replace(/[^a-z0-9_/-]+/g, " ")
+    .trim();
+}
+
+function extractCompanionSearchTokens(question: string): string[] {
+  const normalized = normalizeCompanionSearchText(question);
+
+  const tokens = normalized
+    .split(/\s+/)
+    .filter(
+      (token) =>
+        token.length >= 4 &&
+        !COMPANION_STOP_WORDS.has(token),
+    );
+
+  return [...new Set(tokens)].slice(0, 18);
+}
+
+function scoreCompanionCandidate(
+  question: string,
+  tokens: string[],
+  path: string,
+  content: string,
+  planningRequest: boolean,
+): number {
+  const normalizedPath = normalizeCompanionSearchText(path);
+  const normalizedContent = normalizeCompanionSearchText(content).slice(
+    0,
+    30_000,
+  );
+
+  let score = 0;
+
+  for (const token of tokens) {
+    if (normalizedPath.split(/[\s/_-]+/).includes(token)) {
+      score += 20;
+    } else if (normalizedPath.includes(token)) {
+      score += 10;
+    }
+
+    const occurrences = normalizedContent.split(token).length - 1;
+    score += Math.min(occurrences, 5) * 3;
+  }
+
+  const lowerPath = path.toLowerCase();
+  const lowerQuestion = normalizeCompanionSearchText(question);
+
+  if (
+    planningRequest &&
+    lowerPath.includes("journal")
+  ) {
+    score += 120;
+  }
+
+  if (
+    /combo|score|ricochet|throw|stone|charge|safe|greed|overcharge/i.test(
+      lowerQuestion,
+    ) &&
+    /main|throw|score|combo|stone|charge|ricochet/i.test(lowerPath)
+  ) {
+    score += 35;
+  }
+
+  if (
+    /architecture|architect|refactor|structure|code|system|separation/i.test(
+      lowerQuestion,
+    ) &&
+    /src|script|manager|service|controller|rules/i.test(lowerPath)
+  ) {
+    score += 30;
+  }
+
+  if (
+    /ui|interface|ux|button|screen|menu|dialogue|dialog/i.test(
+      lowerQuestion,
+    ) &&
+    /ui|dialog|menu|screen|hud|scene/i.test(lowerPath)
+  ) {
+    score += 30;
+  }
+
+  return score;
+}
+
+function selectRelevantText(
+  content: string,
+  question: string,
+  maxChars: number,
+  path: string,
+): string {
+  if (content.length <= maxChars) {
+    return content;
+  }
+
+  const tokens = extractCompanionSearchTokens(question);
+  const lines = content.replace(/\r/g, "").split("\n");
+  const normalizedLines = lines.map((line) =>
+    normalizeCompanionSearchText(line),
+  );
+
+  const matchedIndexes: number[] = [];
+
+  for (let index = 0; index < normalizedLines.length; index += 1) {
+    if (
+      tokens.some((token) => normalizedLines[index].includes(token))
+    ) {
+      matchedIndexes.push(index);
+    }
+  }
+
+  if (matchedIndexes.length === 0) {
+    return compactCompanionText(content, maxChars) ?? "";
+  }
+
+  const windows: Array<{ start: number; end: number }> = [];
+  const radius = /\.md$/i.test(path) ? 18 : 28;
+
+  for (const index of matchedIndexes) {
+    const start = Math.max(0, index - radius);
+    const end = Math.min(lines.length, index + radius + 1);
+
+    const overlaps = windows.some(
+      (window) =>
+        start <= window.end + 2 &&
+        end >= window.start - 2,
+    );
+
+    if (!overlaps) {
+      windows.push({ start, end });
+    }
+
+    if (windows.length >= 5) {
+      break;
+    }
+  }
+
+  const focused = windows
+    .map((window) => lines.slice(window.start, window.end).join("\n"))
+    .join("\n\n[... extrait suivant ...]\n\n");
+
+  return (
+    compactCompanionText(focused, maxChars) ??
+    compactCompanionText(content, maxChars) ??
+    ""
+  );
+}
+
+type CompanionRetrievalCandidate = {
+  repository: GithubRepositoryContext;
+  source: string;
+  path: string;
+  kind: "JOURNAL_AUDIT" | "PROJECT_DOCUMENT" | "CODE_OR_DOCUMENT";
+  content: string;
+  score: number;
+};
+
+function retrieveCompanionCandidates(
+  context: ProjectAiContext,
+  question: string,
+  planningRequest: boolean,
+): {
+  documents: CompanionRetrievalCandidate[];
+  files: CompanionRetrievalCandidate[];
+} {
+  const tokens = extractCompanionSearchTokens(question);
+  const repositories =
+    context.repositories?.length > 0
+      ? context.repositories
+      : [context];
+
+  const candidates: CompanionRetrievalCandidate[] = [];
+
+  for (const repository of repositories.slice(
+    0,
+    MAX_REPOSITORIES_IN_CONTEXT,
+  )) {
+    for (const document of repository.project_documents) {
+      candidates.push({
+        repository,
+        source:
+          repository.repository.full_name + ":" + document.path,
+        path: document.path,
+        kind: document.kind,
+        content: document.content,
+        score: scoreCompanionCandidate(
+          question,
+          tokens,
+          document.path,
+          document.content,
+          planningRequest,
+        ),
+      });
+    }
+
+    for (const file of repository.selected_files) {
+      candidates.push({
+        repository,
+        source:
+          repository.repository.full_name + ":" + file.path,
+        path: file.path,
+        kind: "CODE_OR_DOCUMENT",
+        content: file.content,
+        score: scoreCompanionCandidate(
+          question,
+          tokens,
+          file.path,
+          file.content,
+          planningRequest,
+        ),
+      });
+    }
+  }
+
+  candidates.sort((a, b) => {
+    if (b.score !== a.score) {
+      return b.score - a.score;
+    }
+
+    if (a.repository.repository.full_name !== b.repository.repository.full_name) {
+      return a.repository.repository.full_name.localeCompare(
+        b.repository.repository.full_name,
+      );
+    }
+
+    return a.path.localeCompare(b.path);
+  });
+
+  const documents = candidates
+    .filter(
+      (candidate) =>
+        candidate.kind === "JOURNAL_AUDIT" ||
+        candidate.kind === "PROJECT_DOCUMENT",
+    )
+    .slice(0, MAX_RETRIEVAL_DOCUMENTS);
+
+  const files = candidates
+    .filter((candidate) => candidate.kind === "CODE_OR_DOCUMENT")
+    .slice(0, MAX_RETRIEVAL_FILES);
+
+  if (
+    planningRequest &&
+    !documents.some((candidate) => candidate.kind === "JOURNAL_AUDIT")
+  ) {
+    const fallbackJournal = candidates.find(
+      (candidate) => candidate.kind === "JOURNAL_AUDIT",
+    );
+
+    if (fallbackJournal) {
+      documents.pop();
+      documents.unshift(fallbackJournal);
+    }
+  }
+
+  return { documents, files };
+}
+
+function scoreMemoryEntry(
+  question: string,
+  tokens: string[],
+  values: string[],
+  planningRequest: boolean,
+): number {
+  const haystack = normalizeCompanionSearchText(values.join(" "));
+
+  let score = 0;
+
+  for (const token of tokens) {
+    if (haystack.includes(token)) {
+      score += 6;
+    }
+  }
+
+  if (planningRequest) {
+    score += values.some((value) =>
+      /next|prochaine|priorit|playtest|calibr/i.test(
+        normalizeCompanionSearchText(value),
+      ),
+    )
+      ? 25
+      : 0;
+  }
+
+  return score;
+}
+
+function selectRelevantProjectMemory(
+  context: ProjectAiContext,
+  question: string,
+  planningRequest: boolean,
+): {
+  active_tasks: ProjectAiContext["project_os"]["active_tasks"];
+  recent_tasks: ProjectAiContext["project_os"]["tasks"];
+  active_decisions: ProjectAiContext["project_os"]["active_decisions"];
+  recent_decisions: ProjectAiContext["project_os"]["decisions"];
+  recent_activities: ProjectAiContext["project_os"]["recent_activities"];
+} {
+  const tokens = extractCompanionSearchTokens(question);
+
+  const sortByScore = <T>(
+    items: T[],
+    values: (item: T) => string[],
+  ): T[] =>
+    items
+      .map((item, index) => ({
+        item,
+        index,
+        score: scoreMemoryEntry(
+          question,
+          tokens,
+          values(item),
+          planningRequest,
+        ),
+      }))
+      .sort((a, b) => {
+        if (b.score !== a.score) {
+          return b.score - a.score;
+        }
+
+        return a.index - b.index;
+      })
+      .slice(0, MAX_MEMORY_ITEMS)
+      .map(({ item }) => item);
+
+  return {
+    active_tasks: sortByScore(
+      context.project_os.active_tasks,
+      (item) => [item.title, item.status],
+    ),
+    recent_tasks: sortByScore(
+      context.project_os.tasks,
+      (item) => [item.title, item.status],
+    ),
+    active_decisions: sortByScore(
+      context.project_os.active_decisions,
+      (item) => [item.title, item.decision, item.status],
+    ),
+    recent_decisions: sortByScore(
+      context.project_os.decisions,
+      (item) => [item.title, item.decision, item.reason ?? ""],
+    ),
+    recent_activities: sortByScore(
+      context.project_os.recent_activities,
+      (item) => [item.title, item.description ?? "", item.type],
+    ),
+  };
+}
+
 function buildCurrentProjectDossier(
   context: ProjectAiContext,
   planningRequest: boolean,
+  question: string,
 ): Array<{
   repository: string;
   current_knowledge: Array<{
@@ -1837,64 +2262,109 @@ function buildCurrentProjectDossier(
       ? context.repositories
       : [context];
 
-  return repositories.slice(0, MAX_REPOSITORIES_IN_CONTEXT).map(
-    (repository, repositoryIndex) => {
-      const isPrimaryRepository = repositoryIndex === 0;
-
-      const knowledgeBudget = isPrimaryRepository
-        ? planningRequest
-          ? 18_000
-          : 16_000
-        : 5_000;
-
-      const coreFileCount = isPrimaryRepository
-        ? planningRequest
-          ? 8
-          : 10
-        : 2;
-
-      const coreFileBudget = isPrimaryRepository
-        ? planningRequest
-          ? 5_000
-          : 5_500
-        : 2_000;
-
-      const auditDocuments = repository.project_documents.filter(
-        (document) => document.kind === "JOURNAL_AUDIT",
-      );
-
-      const currentKnowledge = auditDocuments
-        .map((document) => ({
-          source:
-            repository.repository.full_name + ":" + document.path,
-          content: extractCurrentKnowledge(
-            document.content,
-            knowledgeBudget,
-          ),
-        }))
-        .filter((document) => document.content);
-
-      const coreFiles = repository.selected_files
-        .slice(0, coreFileCount)
-        .map((file) => ({
-          source:
-            repository.repository.full_name + ":" + file.path,
-          path: file.path,
-          content:
-            compactCompanionText(
-              file.content,
-              coreFileBudget,
-            ) ?? "",
-        }))
-        .filter((file) => file.content);
-
-      return {
-        repository: repository.repository.full_name,
-        current_knowledge: currentKnowledge,
-        core_files: coreFiles,
-      };
-    },
+  const retrieval = retrieveCompanionCandidates(
+    context,
+    question,
+    planningRequest,
   );
+
+  const byRepository = new Map<
+    string,
+    {
+      repository: string;
+      current_knowledge: Array<{
+        source: string;
+        content: string;
+      }>;
+      core_files: Array<{
+        source: string;
+        path: string;
+        content: string;
+      }>;
+    }
+  >();
+
+  for (const repository of repositories.slice(
+    0,
+    MAX_REPOSITORIES_IN_CONTEXT,
+  )) {
+    byRepository.set(repository.repository.full_name, {
+      repository: repository.repository.full_name,
+      current_knowledge: [],
+      core_files: [],
+    });
+  }
+
+  for (const candidate of retrieval.documents) {
+    const entry = byRepository.get(
+      candidate.repository.repository.full_name,
+    );
+
+    if (!entry) {
+      continue;
+    }
+
+    const budget =
+      candidate.kind === "JOURNAL_AUDIT"
+        ? planningRequest
+          ? 14_000
+          : 9_000
+        : 7_000;
+
+    entry.current_knowledge.push({
+      source: candidate.source,
+      content:
+        planningRequest && candidate.kind === "JOURNAL_AUDIT"
+          ? extractCurrentKnowledge(candidate.content, budget)
+          : selectRelevantText(
+              candidate.content,
+              question,
+              budget,
+              candidate.path,
+            ),
+    });
+  }
+
+  for (const candidate of retrieval.files) {
+    const entry = byRepository.get(
+      candidate.repository.repository.full_name,
+    );
+
+    if (!entry) {
+      continue;
+    }
+
+    const budget =
+      candidate.repository.repository.full_name ===
+      repositories[0]?.repository.full_name
+        ? 5_500
+        : 2_500;
+
+    entry.core_files.push({
+      source: candidate.source,
+      path: candidate.path,
+      content: selectRelevantText(
+        candidate.content,
+        question,
+        budget,
+        candidate.path,
+      ),
+    });
+  }
+
+  const primary = repositories[0]?.repository.full_name;
+
+  return [...byRepository.values()]
+    .filter(
+      (entry) =>
+        entry.current_knowledge.length > 0 ||
+        entry.core_files.length > 0,
+    )
+    .sort((a, b) => {
+      if (a.repository === primary) return -1;
+      if (b.repository === primary) return 1;
+      return a.repository.localeCompare(b.repository);
+    });
 }
 
 function buildProjectCompanionInput(
@@ -1910,9 +2380,16 @@ function buildProjectCompanionInput(
   const currentDossier = buildCurrentProjectDossier(
     context,
     planningRequest,
+    question,
   );
   const currentPlanningPriorities =
     extractCurrentPlanningPriorities(context);
+  const relevantProjectMemory =
+    selectRelevantProjectMemory(
+      context,
+      question,
+      planningRequest,
+    );
 
   const evidenceSources = currentDossier.flatMap((repository) => [
     ...repository.current_knowledge.map((document) => ({
@@ -1942,11 +2419,7 @@ function buildProjectCompanionInput(
 
     PROJECT_MEMORY: {
       identity: context.project_os.project,
-      active_tasks: context.project_os.active_tasks,
-      recent_tasks: context.project_os.tasks,
-      active_decisions: context.project_os.active_decisions,
-      recent_decisions: context.project_os.decisions,
-      recent_activities: context.project_os.recent_activities,
+      ...relevantProjectMemory,
     },
 
     PRIMARY_PROJECT_DOSSIER: {
