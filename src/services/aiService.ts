@@ -1853,6 +1853,13 @@ function parseProjectAskResult(
   return { answer: value.answer };
 }
 
+function normalizeCodeEvidence(value: string): string {
+  return value
+    .replace(/\r/g, "")
+    .replace(/\s+/g, " ")
+    .trim();
+}
+
 function validatePlanningResult(
   context: ProjectAiContext,
   result: ProjectAskPlanning,
@@ -1883,8 +1890,14 @@ function validatePlanningResult(
       (file) => file.path === item.file,
     );
 
-    if (!source || !item.quote.trim() || !source.content.includes(item.quote)) {
-      return "Une preuve ne correspond pas exactement au contenu actuel de " + item.file + ".";
+    if (
+      !source ||
+      !item.quote.trim() ||
+      !normalizeCodeEvidence(source.content).includes(
+        normalizeCodeEvidence(item.quote),
+      )
+    ) {
+      return "Une preuve ne correspond pas au contenu actuel de " + item.file + ".";
     }
   }
 
