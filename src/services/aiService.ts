@@ -2271,6 +2271,62 @@ function hasGroundedProjectAskEvidence(
   });
 }
 
+function canUseConservativePlanningDiagnosis(
+  context: ProjectAiContext,
+  diagnosis: ProjectAskDiagnosis,
+): boolean {
+  if (diagnosis.status !== "GROUNDED_IMPROVEMENT") {
+    return false;
+  }
+
+  if (diagnosis.confidence < 0.65) {
+    return false;
+  }
+
+  if (diagnosis.evidence.length === 0) {
+    return false;
+  }
+
+  if (diagnosis.unknowns.length > 0) {
+    return false;
+  }
+
+  const knownPaths = new Set(context.repository_tree);
+
+  return diagnosis.files.every(
+    (file) =>
+      knownPaths.has(file) ||
+      context.selected_files.some((selected) => selected.path === file),
+  );
+}
+
+function renderConservativePlanningDiagnosis(
+  diagnosis: ProjectAskDiagnosis,
+  reviewerIssues: string[],
+): ProjectAskPlanning {
+  return {
+    title: diagnosis.title,
+    why_now:
+      diagnosis.why_now +
+      " Le diagnostic a été conservé comme amélioration de roadmap, mais certaines objections du reviewer empêchent de le présenter comme un défaut confirmé.",
+    files: diagnosis.files,
+    expected: diagnosis.problem,
+    success:
+      diagnosis.causal_chain.length > 0
+        ? diagnosis.causal_chain.join(" → ")
+        : "La prochaine évolution est implémentée et vérifiée sur le comportement attendu.",
+    evidence: [
+      ...diagnosis.evidence,
+      ...diagnosis.counterevidence.map(
+        (item) => "CONTRE-PREUVE PRISE EN COMPTE: " + item,
+      ),
+      ...reviewerIssues.map(
+        (issue) => "REVIEW À GARDER EN TÊTE: " + issue,
+      ),
+    ].slice(0, 8),
+  };
+}
+
 function hasValidProjectAskFiles(
   context: ProjectAiContext,
   result: ProjectAskPlanning,
@@ -2490,21 +2546,31 @@ export async function askProjectWithAI(
   }
 
   if (!diagnosisReview.approved) {
+    if (canUseConservativePlanningDiagnosis(context, diagnosis)) {
+      return renderProjectAskResult(
+        renderConservativePlanningDiagnosis(
+          diagnosis,
+          diagnosisReview.issues,
+        ),
+        "PLANNING",
+      );
+    }
+
     const files = context.selected_files
       .filter((file) => !file.truncated)
-      .slice(0, 4)
+      .slice(0, 6)
       .map((file) => file.path);
 
     return renderProjectAskResult(
       {
         title: "Diagnostic insuffisant pour choisir une modification",
         why_now:
-          "Le contexte actuel ne permet pas de valider un diagnostic technique suffisamment solide pour recommander une modification précise.",
+          "Le contexte actuel ne permet pas de valider une modification suffisamment ancrée pour être recommandée sans réserve.",
         files,
         expected:
-          "Inspecter le comportement ou les fichiers manquants avant de créer une nouvelle tâche.",
+          "Inspecter les systèmes concernés ou les fichiers manquants avant de créer une nouvelle tâche.",
         success:
-          "Une chaîne causale complète et vérifiable relie le comportement observé à la modification proposée.",
+          "Une prochaine évolution est reliée à des preuves concrètes du projet et ne dépend pas d'un bug inventé.",
         evidence: diagnosisReview.issues.map(
           (issue) => "DIAGNOSTIC REVIEW: " + issue,
         ),
