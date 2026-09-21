@@ -466,7 +466,14 @@ function selectFocusedContent(
   const isMarkdown = getExtension(path) === ".md";
   const isHistoricalDoc = isHistoricalDocumentationPath(path);
 
-  if (isMarkdown && isHistoricalDoc && !focusText?.trim()) {
+  if (
+    isMarkdown &&
+    isHistoricalDoc &&
+    (
+      !focusText?.trim() ||
+      isDevelopmentPlanningQuestion(focusText)
+    )
+  ) {
     const headChars = Math.floor(maxChars * 0.35);
     const tailChars = maxChars - headChars;
 
