@@ -2219,6 +2219,46 @@ function parseProjectAskResult(
   return { answer: value.answer };
 }
 
+function hasGroundedProjectAskEvidence(
+  context: ProjectAiContext,
+  result: ProjectAskPlanning,
+): boolean {
+  if (result.evidence.length === 0) {
+    return false;
+  }
+
+  const selectedPaths = context.selected_files.map((file) => file.path);
+  const activeTaskIds = context.project_os.active_tasks.map((task) => task.id);
+  const activeDecisionIds = context.project_os.active_decisions.map(
+    (decision) => decision.id,
+  );
+
+  return result.evidence.some((evidence) => {
+    return (
+      selectedPaths.some((path) => evidence.includes(path)) ||
+      activeTaskIds.some((id) => evidence.includes("TASK:" + id)) ||
+      activeDecisionIds.some((id) => evidence.includes("DECISION:" + id))
+    );
+  });
+}
+
+function hasValidProjectAskFiles(
+  context: ProjectAiContext,
+  result: ProjectAskPlanning,
+): boolean {
+  const tree = new Set(context.repository_tree);
+
+  return result.files.every((file) => {
+    if (tree.has(file)) {
+      return true;
+    }
+
+    return context.selected_files.some(
+      (selected) => selected.path === file,
+    );
+  });
+}
+
 function renderProjectAskResult(
   result: ProjectAskPlanning | ProjectAskFeature | ProjectAskGeneral,
   mode: ProjectAskMode,
@@ -2462,6 +2502,22 @@ export async function askProjectWithAI(
     question,
     result,
   );
+
+  if (
+    grounding.grounded &&
+    (
+      !hasGroundedProjectAskEvidence(context, result) ||
+      !hasValidProjectAskFiles(context, result)
+    )
+  ) {
+    grounding = {
+      grounded: false,
+      issues: [
+        ...grounding.issues,
+        "La réponse finale ne possède pas de preuve directement rattachable au contexte fourni ou cite un fichier qui n'existe pas dans l'arborescence connue.",
+      ],
+    };
+  }
 
   if (!grounding.grounded) {
     const repairInstructions = [
