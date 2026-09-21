@@ -25,6 +25,22 @@ type OllamaThinkLevel =
   | "high"
   | "max";
 
+type CloudflareChatResponse = {
+  success?: boolean;
+  errors?: Array<{
+    code?: number;
+    message?: string;
+  }>;
+  result?: {
+    response?: string;
+    choices?: Array<{
+      message?: {
+        content?: string | null;
+      };
+    }>;
+  };
+};
+
 type GeminiInteractionResponse = {
   status?: string;
   steps?: Array<{
@@ -36,7 +52,7 @@ type GeminiInteractionResponse = {
   }>;
 };
 
-type AiProvider = "ollama" | "gemini";
+type AiProvider = "ollama" | "gemini" | "cloudflare";
 
 
 type RawAiObservedFeature = {
@@ -107,9 +123,80 @@ function getOllamaConfig(): {
 
 
 function getAiProvider(): AiProvider {
-  return process.env.AI_PROVIDER?.trim().toLowerCase() === "gemini"
-    ? "gemini"
-    : "ollama";
+  const provider = process.env.AI_PROVIDER?.trim().toLowerCase();
+
+  if (provider === "cloudflare") {
+    const input = buildCompactAiInput(context);
+    const instructions = buildInstructions();
+    const content = await requestCloudflareStructured(
+      input,
+      instructions,
+      AI_REVIEW_JSON_SCHEMA,
+    );
+    const review = tryParseAiReview(content, context);
+
+    if (!review) {
+      throw new Error(
+        "Cloudflare Workers AI a renvoyé un JSON de review inexploitable.",
+      );
+    }
+
+    return review;
+  }
+
+  if (provider === "gemini") {
+    return "gemini";
+  }
+
+  if (provider === "cloudflare") {
+    return "cloudflare";
+  }
+
+  return "ollama";
+}
+
+function getCloudflareConfig(): {
+  accountId: string;
+  apiToken: string;
+  model: string;
+  maxTokens: number;
+  temperature: number;
+} {
+  const accountId = process.env.CLOUDFLARE_ACCOUNT_ID?.trim();
+  const apiToken = process.env.CLOUDFLARE_API_TOKEN?.trim();
+
+  if (!accountId || !apiToken) {
+    throw new Error(
+      "CLOUDFLARE_ACCOUNT_ID ou CLOUDFLARE_API_TOKEN est absent. Configure les identifiants Workers AI dans ton .env.",
+    );
+  }
+
+  const rawMaxTokens = Number.parseInt(
+    process.env.CLOUDFLARE_MAX_TOKENS?.trim() || "1800",
+    10,
+  );
+
+  const rawTemperature = Number.parseFloat(
+    process.env.CLOUDFLARE_TEMPERATURE?.trim() || "0",
+  );
+
+  return {
+    accountId,
+    apiToken,
+    model:
+      process.env.CLOUDFLARE_AI_MODEL?.trim() ||
+      "@cf/qwen/qwen3-30b-a3b-fp8",
+    maxTokens:
+      Number.isFinite(rawMaxTokens) && rawMaxTokens > 0
+        ? Math.min(rawMaxTokens, 4000)
+        : 1800,
+    temperature:
+      Number.isFinite(rawTemperature) &&
+      rawTemperature >= 0 &&
+      rawTemperature <= 5
+        ? rawTemperature
+        : 0,
+  };
 }
 
 function getGeminiConfig(): {
@@ -1104,6 +1191,142 @@ const AI_REVIEW_JSON_SCHEMA = {
 
 let lastGeminiRequestAt = 0;
 const GEMINI_MIN_REQUEST_INTERVAL_MS = 12_500;
+
+async function callCloudflare(
+  accountId: string,
+  apiToken: string,
+  model: string,
+  input: string,
+  instructions: string,
+  schema: object,
+  maxTokens: number,
+  temperature: number,
+): Promise<CloudflareChatResponse> {
+  const url =
+    "https://api.cloudflare.com/client/v4/accounts/" +
+    encodeURIComponent(accountId) +
+    "/ai/run/" +
+    encodeURIComponent(model);
+
+  let response: Response;
+
+  try {
+    response = await fetch(url, {
+      method: "POST",
+      headers: {
+        "Content-Type": "application/json",
+        Authorization: "Bearer " + apiToken,
+      },
+      body: JSON.stringify({
+        messages: [
+          {
+            role: "system",
+            content: instructions,
+          },
+          {
+            role: "user",
+            content: input,
+          },
+        ],
+        response_format: {
+          type: "json_schema",
+          json_schema: schema,
+        },
+        stream: false,
+        max_tokens: maxTokens,
+        temperature,
+        seed: 42,
+        repetition_penalty: 1.05,
+      }),
+    });
+  } catch {
+    throw new Error(
+      "Impossible de joindre Cloudflare Workers AI. Vérifie ta connexion et tes identifiants.",
+    );
+  }
+
+  const bodyText = await response.text();
+
+  let body: CloudflareChatResponse | null = null;
+
+  try {
+    body = JSON.parse(bodyText) as CloudflareChatResponse;
+  } catch {
+    throw new Error(
+      "Cloudflare Workers AI a renvoyé une réponse invalide (" +
+        response.status +
+        ").",
+    );
+  }
+
+  if (!response.ok || body.success === false) {
+    const message =
+      body.errors
+        ?.map((item) => item.message)
+        .filter((item): item is string => typeof item === "string")
+        .join(" | ")
+        .trim() || bodyText.slice(0, 500);
+
+    throw new Error(
+      "Cloudflare Workers AI " +
+        response.status +
+        " : " +
+        message,
+    );
+  }
+
+  return body;
+}
+
+function getCloudflareContent(
+  response: CloudflareChatResponse,
+): string {
+  const direct = response.result?.response?.trim();
+
+  if (direct) {
+    return direct;
+  }
+
+  return (
+    response.result?.choices
+      ?.flatMap((choice) =>
+        typeof choice.message?.content === "string"
+          ? [choice.message.content.trim()]
+          : [],
+      )
+      .filter(Boolean)
+      .join("\n")
+      .trim() || ""
+  );
+}
+
+async function requestCloudflareStructured(
+  input: string,
+  instructions: string,
+  schema: object,
+): Promise<string> {
+  const config = getCloudflareConfig();
+  const response = await callCloudflare(
+    config.accountId,
+    config.apiToken,
+    config.model,
+    input,
+    instructions,
+    schema,
+    config.maxTokens,
+    config.temperature,
+  );
+
+  const content = getCloudflareContent(response);
+
+  if (!content) {
+    throw new Error(
+      "Cloudflare Workers AI n'a renvoyé aucun contenu exploitable.",
+    );
+  }
+
+  return content;
+}
 
 async function callGemini(
   apiKey: string,
@@ -3091,6 +3314,14 @@ function requestProjectAskStructured(
 ): Promise<string> {
   const provider = getAiProvider();
 
+  if (provider === "cloudflare") {
+    return requestCloudflareStructured(
+      input,
+      instructions,
+      schema,
+    );
+  }
+
   if (provider === "gemini") {
     const config = getGeminiConfig();
 
@@ -3120,6 +3351,23 @@ function requestProjectAskStructured(
           )
         ) {
           throw error;
+        }
+
+        let cloudflareError: unknown = null;
+
+        if (
+          process.env.CLOUDFLARE_ACCOUNT_ID?.trim() &&
+          process.env.CLOUDFLARE_API_TOKEN?.trim()
+        ) {
+          try {
+            return await requestCloudflareStructured(
+              input,
+              instructions,
+              schema,
+            );
+          } catch (fallbackError) {
+            cloudflareError = fallbackError;
+          }
         }
 
         const fallback = getOllamaConfig();
@@ -3155,14 +3403,26 @@ function requestProjectAskStructured(
         } catch (fallbackError) {
           const original =
             error instanceof Error ? error.message : String(error);
+          const cloudflareMessage =
+            cloudflareError instanceof Error
+              ? cloudflareError.message
+              : cloudflareError
+                ? String(cloudflareError)
+                : null;
           const fallbackMessage =
             fallbackError instanceof Error
               ? fallbackError.message
               : String(fallbackError);
 
           throw new Error(
-            "Gemini indisponible (" + original +
-              "). Fallback Ollama échoué : " + fallbackMessage,
+            "Gemini indisponible (" +
+              original +
+              ")." +
+              (cloudflareMessage
+                ? " Fallback Cloudflare échoué : " + cloudflareMessage + "."
+                : "") +
+              " Fallback Ollama échoué : " +
+              fallbackMessage,
           );
         }
       });
