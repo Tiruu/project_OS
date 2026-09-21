@@ -75,10 +75,24 @@ export type GithubRepositoryContext = {
 };
 
 const MAX_TREE_ENTRIES = 250;
-const MAX_SELECTED_FILES = 12;
+const MAX_SELECTED_FILES = 16;
 const MAX_FILE_CHARS = 8000;
 const MAX_DEEP_CODE_FILE_CHARS = 18000;
-const MAX_TOTAL_FILE_CHARS = 70000;
+const MAX_TOTAL_FILE_CHARS = 72000;
+
+const CORE_PLANNING_PATHS = [
+  "scripts/main.gd",
+  "scripts/throw_controller.gd",
+  "scripts/stone.gd",
+  "scripts/throw_data.gd",
+  "scripts/fail_rules.gd",
+  "scripts/score_rules.gd",
+  "scripts/ui.gd",
+  "scripts/strength_slider.gd",
+  "scripts/camera_shake.gd",
+  "scripts/dialogue_manager.gd",
+  "scripts/water_detector.gd",
+];
 
 const IGNORED_PATH_PARTS = new Set([
   ".git",
@@ -561,7 +575,29 @@ function selectContextFiles(
     })
     .sort((a, b) => b.score - a.score);
 
-  return candidates.slice(0, MAX_SELECTED_FILES);
+  if (!isDevelopmentPlanningQuestion(focusText)) {
+    return candidates.slice(0, MAX_SELECTED_FILES);
+  }
+
+  const candidateMap = new Map(
+    candidates.map((candidate) => [candidate.path, candidate]),
+  );
+
+  const core = CORE_PLANNING_PATHS
+    .filter((path) => candidateMap.has(path))
+    .map((path) => ({
+      path,
+      reason: "Système gameplay central",
+      score: Number.POSITIVE_INFINITY,
+    }));
+
+  const corePaths = new Set(core.map((item) => item.path));
+
+  const remaining = candidates.filter(
+    (candidate) => !corePaths.has(candidate.path),
+  );
+
+  return [...core, ...remaining].slice(0, MAX_SELECTED_FILES);
 }
 
 export async function getGithubRepositoryContext(
