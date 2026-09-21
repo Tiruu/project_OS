@@ -1819,19 +1819,69 @@ function parseProjectAskDiagnosis(
     throw new Error("Le diagnostic IA de /project-ask n'est pas conforme.");
   }
 
+  const files = value.files.filter(
+    (item): item is string => typeof item === "string",
+  );
+  const evidence = value.evidence.filter(
+    (item): item is string => typeof item === "string",
+  );
+  const counterevidence = value.counterevidence.filter(
+    (item): item is string => typeof item === "string",
+  );
+  const causalChain = value.causal_chain.filter(
+    (item): item is string => typeof item === "string",
+  );
+  const unknowns = value.unknowns.filter(
+    (item): item is string => typeof item === "string",
+  );
+  const confidence = Math.max(0, Math.min(1, value.confidence));
+
+  let status = value.status;
+
+  if (
+    status === "VERIFIED_DEFECT" &&
+    (
+      confidence < 0.8 ||
+      evidence.length < 2 ||
+      causalChain.length < 2 ||
+      unknowns.length > 0
+    )
+  ) {
+    status = "INDETERMINATE";
+    unknowns.push(
+      "Le diagnostic ne satisfait pas les critères minimaux pour être classé comme défaut vérifié.",
+    );
+  }
+
+  if (
+    status === "ACTIVE_TASK" &&
+    !evidence.some((item) => /^TASK:[a-f0-9-]+/i.test(item.trim()))
+  ) {
+    status = "INDETERMINATE";
+    unknowns.push(
+      "La tâche active n'est pas rattachée explicitement à un identifiant TASK.",
+    );
+  }
+
+  if (status === "GROUNDED_IMPROVEMENT" && evidence.length === 0) {
+    status = "INDETERMINATE";
+    unknowns.push(
+      "L'amélioration proposée ne possède aucune preuve explicite.",
+    );
+  }
+
   return {
-    status: value.status,
+    status,
     title: value.title,
     problem: value.problem,
     why_now: value.why_now,
-    files: value.files.filter((item): item is string => typeof item === "string"),
-    evidence: value.evidence.filter((item): item is string => typeof item === "string"),
-    counterevidence: value.counterevidence.filter((item): item is string => typeof item === "string"),
-    causal_chain: value.causal_chain.filter((item): item is string => typeof item === "string"),
-    unknowns: value.unknowns.filter((item): item is string => typeof item === "string"),
-    confidence: Math.max(0, Math.min(1, value.confidence)),
+    files,
+    evidence,
+    counterevidence,
+    causal_chain: causalChain,
+    unknowns,
+    confidence,
   };
-}
 
 function buildProjectAskDiagnosisReviewInput(
   context: ProjectAiContext,
@@ -1963,6 +2013,10 @@ function buildProjectAskInstructions(
       "Pour une tâche BUG, why_now et evidence doivent être fondés sur le code actuel ou une active_task/active_decision actuelle. Une recent_activity historique ne peut jamais être la preuve principale d'un bug actuel.",
       "Dans evidence, n'utilise jamais ACTIVITY:<id> pour justifier la prochaine modification. Les preuves valides sont le contenu actuel des fichiers fournis ou TASK:<id>/DECISION:<id> pour des éléments encore actifs.",
       "Une evidence qui ne peut pas être rattachée à un fichier fourni, une tâche active ou une décision active ne doit pas être utilisée.",
+      "Si le diagnostic est VERIFIED_DEFECT, la proposition doit traiter le défaut démontré ; ne le transforme pas en simple nettoyage préventif.",
+      "Si le diagnostic est ACTIVE_TASK, la proposition doit rester alignée sur cette tâche et ne pas inventer un nouveau bug voisin.",
+      "Si le diagnostic est GROUNDED_IMPROVEMENT, présente-le comme une amélioration, jamais comme une correction d'un bug non démontré.",
+      "Si le diagnostic est INDETERMINATE, la réponse doit rester explicitement conservatrice.",
       "La réponse doit permettre de créer immédiatement UNE tâche de développement.",
       "",
       "RENVOIE UNIQUEMENT UN OBJET JSON conforme au schéma fourni.",
