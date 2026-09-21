@@ -1489,29 +1489,34 @@ async function reviewProjectWithOllama(
 
 
 
-type ProjectCompanionIdea = {
-  title: string;
-  rationale: string;
-  effort: string;
-  timing: "NOW" | "NEXT" | "LATER";
+type CompanionEvidence = {
+  source: string;
+  excerpt: string;
 };
 
 type ProjectCompanionRecommendation = {
+  priority_id: string;
   title: string;
-  why_now: string;
+  why: string;
+  detail: string;
   effort: string;
-  expected_result: string;
-  success_criteria: string;
-  files: string[];
+  timing: "NOW" | "NEXT" | "LATER";
+  evidence: CompanionEvidence[];
+};
+
+type ProjectCompanionProblem = {
+  title: string;
+  description: string;
+  impact: string;
+  evidence: CompanionEvidence[];
 };
 
 type ProjectCompanionResponse = {
   answer: string;
-  current_state: string;
-  recommendation: ProjectCompanionRecommendation;
-  ideas: ProjectCompanionIdea[];
-  watchouts: string[];
-  uncertainties: string[];
+  project_state: string;
+  recommendations: ProjectCompanionRecommendation[];
+  problems: ProjectCompanionProblem[];
+  unknowns: string[];
   references: string[];
 };
 
@@ -1519,313 +1524,967 @@ const PROJECT_COMPANION_SCHEMA = {
   type: "object",
   required: [
     "answer",
-    "current_state",
-    "recommendation",
-    "ideas",
-    "watchouts",
-    "uncertainties",
+    "project_state",
+    "recommendations",
+    "problems",
+    "unknowns",
     "references",
   ],
   properties: {
     answer: { type: "string" },
-    current_state: { type: "string" },
-    recommendation: {
-      type: "object",
-      required: [
-        "title",
-        "why_now",
-        "effort",
-        "expected_result",
-        "success_criteria",
-        "files",
-      ],
-      properties: {
-        title: { type: "string" },
-        why_now: { type: "string" },
-        effort: { type: "string" },
-        expected_result: { type: "string" },
-        success_criteria: { type: "string" },
-        files: { type: "array", items: { type: "string" } },
-      },
-    },
-    ideas: {
+    project_state: { type: "string" },
+    recommendations: {
       type: "array",
       items: {
         type: "object",
-        required: ["title", "rationale", "effort", "timing"],
+        required: [
+          "title",
+          "why",
+          "detail",
+          "effort",
+          "timing",
+          "evidence",
+        ],
         properties: {
+          priority_id: { type: "string" },
           title: { type: "string" },
-          rationale: { type: "string" },
+          why: { type: "string" },
+          detail: { type: "string" },
           effort: { type: "string" },
           timing: {
             type: "string",
             enum: ["NOW", "NEXT", "LATER"],
           },
+          evidence: {
+            type: "array",
+            minItems: 1,
+            items: {
+              type: "object",
+              required: ["source", "excerpt"],
+              properties: {
+                source: { type: "string" },
+                excerpt: { type: "string" },
+              },
+            },
+          },
         },
       },
     },
-    watchouts: { type: "array", items: { type: "string" } },
-    uncertainties: { type: "array", items: { type: "string" } },
+    problems: {
+      type: "array",
+      items: {
+        type: "object",
+        required: ["title", "description", "impact", "evidence"],
+        properties: {
+          title: { type: "string" },
+          description: { type: "string" },
+          impact: { type: "string" },
+          evidence: {
+            type: "array",
+            minItems: 1,
+            items: {
+              type: "object",
+              required: ["source", "excerpt"],
+              properties: {
+                source: { type: "string" },
+                excerpt: { type: "string" },
+              },
+            },
+          },
+        },
+      },
+    },
+    unknowns: { type: "array", items: { type: "string" } },
     references: { type: "array", items: { type: "string" } },
   },
 } as const;
+
+const MAX_COMPANION_INPUT_CHARS = 150_000;
+const MAX_REPOSITORIES_IN_CONTEXT = 6;
+
+function compactCompanionText(
+  value: string | null | undefined,
+  maxChars: number,
+): string | null {
+  if (!value) {
+    return null;
+  }
+
+  const trimmed = value.trim();
+
+  if (!trimmed) {
+    return null;
+  }
+
+  if (trimmed.length <= maxChars) {
+    return trimmed;
+  }
+
+  const headChars = Math.floor(maxChars * 0.3);
+  const tailChars = maxChars - headChars;
+
+  return (
+    trimmed.slice(0, headChars) +
+    "\n\n[... contexte intermédiaire omis ...]\n\n" +
+    trimmed.slice(-tailChars)
+  );
+}
+
+function isPlanningQuestion(question: string): boolean {
+  const text = question.toLowerCase();
+
+  return [
+    "suite du développement",
+    "suite du developpement",
+    "quoi faire ensuite",
+    "que faire ensuite",
+    "prochaine étape",
+    "prochaine etape",
+    "prochaine tâche",
+    "prochaine tache",
+    "next step",
+    "next task",
+    "what should i do next",
+  ].some((phrase) => text.includes(phrase));
+}
+
+type CurrentPlanningPriority = {
+  id: string;
+  title: string;
+  content: string;
+  source: string;
+  excerpt: string;
+};
+
+function extractCurrentPlanningPriorities(
+  context: ProjectAiContext,
+): CurrentPlanningPriority[] {
+  const repositories =
+    context.repositories?.length > 0
+      ? context.repositories
+      : [context];
+
+  const repository = repositories[0];
+
+  if (!repository) {
+    return [];
+  }
+
+  const journal = repository.project_documents.find(
+    (document) => document.kind === "JOURNAL_AUDIT",
+  );
+
+  if (!journal) {
+    return [];
+  }
+
+  const lines = journal.content.replace(/\r/g, "").split("\n");
+
+  const headings = lines
+    .map((line, index) => {
+      const match = /^(#{1,6})\s+(.+?)\s*$/.exec(line);
+
+      if (!match) {
+        return null;
+      }
+
+      return {
+        index,
+        level: match[1].length,
+        title: match[2].trim(),
+      };
+    })
+    .filter(
+      (
+        item,
+      ): item is { index: number; level: number; title: string } =>
+        item !== null,
+    );
+
+  const priorityHeadings = headings.filter((heading) =>
+    /^P\d+\b/i.test(heading.title),
+  );
+
+  const selectedHeadings =
+    priorityHeadings.length > 0
+      ? priorityHeadings.slice(-6)
+      : headings
+          .filter((heading) =>
+            /priorit|priority|prochaine|next|phase actuelle|current phase/i.test(
+              heading.title,
+            ),
+          )
+          .slice(-6);
+
+  return selectedHeadings
+    .map((heading, index) => {
+      const nextHeading = headings.find(
+        (candidate) =>
+          candidate.index > heading.index &&
+          candidate.level <= heading.level,
+      );
+
+      const body = lines
+        .slice(
+          heading.index + 1,
+          nextHeading?.index ?? lines.length,
+        )
+        .join("\n")
+        .trim();
+
+      const excerpt = (heading.title + "\n" + body).slice(0, 450);
+
+      const idMatch = /^(P\d+)\b/i.exec(heading.title);
+
+      return {
+        id: idMatch?.[1]?.toUpperCase() ?? "PRIORITY_" + (index + 1),
+        title: heading.title,
+        content: body,
+        source:
+          repository.repository.full_name + ":" + journal.path,
+        excerpt,
+      };
+    })
+    .filter((priority) => priority.content);
+}
+
+function extractCurrentKnowledge(
+  content: string,
+  maxChars: number,
+): string {
+  const normalized = content.replace(/\r/g, "");
+  const lines = normalized.split("\n");
+  const headingPattern =
+    /^#{1,6}\s+.*(?:priorit|priority|priorité|priorities|état actuel|etat actuel|current state|audit|diagnostic|ce qu'il ne faut pas|what not to do|prochaine|next|résumé exécutif|resume executif).*$/i;
+
+  const headingIndexes = lines
+    .map((line, index) => ({
+      line,
+      index,
+    }))
+    .filter((item) => headingPattern.test(item.line));
+
+  if (headingIndexes.length === 0) {
+    return compactCompanionText(normalized, maxChars) ?? "";
+  }
+
+  const priorityHeadingIndexes = headingIndexes.filter((item) =>
+    /priorit|priority|priorité|ce qu'il ne faut pas|what not to do|prochaine|next|diagnostic|résumé exécutif|resume executif/i.test(
+      item.line,
+    ),
+  );
+
+  const selected = (
+    priorityHeadingIndexes.length > 0
+      ? priorityHeadingIndexes
+      : headingIndexes
+  ).slice(-4);
+
+  const chunks: string[] = [];
+
+  for (let index = 0; index < selected.length; index += 1) {
+    const start = selected[index].index;
+    const end = selected[index + 1]?.index ?? lines.length;
+
+    chunks.push(lines.slice(start, end).join("\n").trim());
+  }
+
+  return compactCompanionText(
+    chunks.filter(Boolean).join("\n\n"),
+    maxChars,
+  ) ?? "";
+}
+
+function buildCurrentProjectDossier(
+  context: ProjectAiContext,
+  planningRequest: boolean,
+): Array<{
+  repository: string;
+  current_knowledge: Array<{
+    source: string;
+    content: string;
+  }>;
+  core_files: Array<{
+    source: string;
+    path: string;
+    content: string;
+  }>;
+}> {
+  const repositories =
+    context.repositories?.length > 0
+      ? context.repositories
+      : [context];
+
+  return repositories.slice(0, MAX_REPOSITORIES_IN_CONTEXT).map(
+    (repository, repositoryIndex) => {
+      const isPrimaryRepository = repositoryIndex === 0;
+
+      const knowledgeBudget = isPrimaryRepository
+        ? planningRequest
+          ? 18_000
+          : 16_000
+        : 5_000;
+
+      const coreFileCount = isPrimaryRepository
+        ? planningRequest
+          ? 8
+          : 10
+        : 2;
+
+      const coreFileBudget = isPrimaryRepository
+        ? planningRequest
+          ? 5_000
+          : 5_500
+        : 2_000;
+
+      const auditDocuments = repository.project_documents.filter(
+        (document) => document.kind === "JOURNAL_AUDIT",
+      );
+
+      const currentKnowledge = auditDocuments
+        .map((document) => ({
+          source:
+            repository.repository.full_name + ":" + document.path,
+          content: extractCurrentKnowledge(
+            document.content,
+            knowledgeBudget,
+          ),
+        }))
+        .filter((document) => document.content);
+
+      const coreFiles = repository.selected_files
+        .slice(0, coreFileCount)
+        .map((file) => ({
+          source:
+            repository.repository.full_name + ":" + file.path,
+          path: file.path,
+          content:
+            compactCompanionText(
+              file.content,
+              coreFileBudget,
+            ) ?? "",
+        }))
+        .filter((file) => file.content);
+
+      return {
+        repository: repository.repository.full_name,
+        current_knowledge: currentKnowledge,
+        core_files: coreFiles,
+      };
+    },
+  );
+}
 
 function buildProjectCompanionInput(
   context: ProjectAiContext,
   question: string,
 ): string {
-  return JSON.stringify({
-    USER_QUESTION: question,
-    PROJECT_IDENTITY: {
-      repository: context.repository,
-      project: context.project_os.project,
+  const repositories =
+    context.repositories?.length > 0
+      ? context.repositories
+      : [context];
+
+  const planningRequest = isPlanningQuestion(question);
+  const currentDossier = buildCurrentProjectDossier(
+    context,
+    planningRequest,
+  );
+  const currentPlanningPriorities =
+    extractCurrentPlanningPriorities(context);
+
+  const evidenceSources = currentDossier.flatMap((repository) => [
+    ...repository.current_knowledge.map((document) => ({
+      source: document.source,
+      kind: "JOURNAL_AUDIT",
+    })),
+    ...repository.core_files.map((file) => ({
+      source: file.source,
+      kind: "CODE_OR_DOCUMENT",
+    })),
+  ]);
+
+  const repositoryOverview = repositories
+    .slice(0, MAX_REPOSITORIES_IN_CONTEXT)
+    .map((repository) => ({
+      repository: repository.repository,
+      repository_tree: repository.repository_tree.slice(0, 100),
+      readme: compactCompanionText(repository.readme, 2_000),
+      package_json: repository.package_json,
+    }));
+
+  const input = {
+    PROJECT_COMPANION_REQUEST: {
+      user_request: question,
+      is_planning_request: planningRequest,
     },
-    CURRENT_PROJECT_MANAGEMENT: {
+
+    PROJECT_MEMORY: {
+      identity: context.project_os.project,
       active_tasks: context.project_os.active_tasks,
-      recent_tasks_and_history: context.project_os.tasks,
+      recent_tasks: context.project_os.tasks,
       active_decisions: context.project_os.active_decisions,
       recent_decisions: context.project_os.decisions,
-      recent_non_ai_activities: context.project_os.recent_activities,
+      recent_activities: context.project_os.recent_activities,
     },
-    PROJECT_DOCUMENTATION: context.project_documents,
-    REPOSITORY_OVERVIEW: {
-      tree: context.repository_tree,
-      readme: context.readme,
-      package_json: context.package_json,
+
+    PRIMARY_PROJECT_DOSSIER: {
+      meaning:
+        "Section prioritaire. Pour une demande de prochaine étape, elle fait foi sur la phase du projet et ses priorités actuelles, sauf preuve plus récente et explicite dans PROJECT_MEMORY.",
+      current_state_and_priorities: currentDossier,
     },
-    CODE_CONTEXT: context.selected_files.map((file) => ({
-      path: file.path,
-      reason: file.reason,
-      content: file.content,
-    })),
+
+    CURRENT_PLANNING_PRIORITIES: currentPlanningPriorities.map(
+      (priority) => ({
+        id: priority.id,
+        title: priority.title,
+        content: priority.content,
+        source: priority.source,
+        excerpt: priority.excerpt,
+      }),
+    ),
+
+    MANDATORY_FIRST_DIRECTION:
+      planningRequest && currentPlanningPriorities[0]
+        ? {
+            priority_id: currentPlanningPriorities[0].id,
+            title: currentPlanningPriorities[0].title,
+            source: currentPlanningPriorities[0].source,
+            excerpt: currentPlanningPriorities[0].excerpt,
+            rule:
+              "La première direction doit développer cette priorité et ne doit pas la remplacer par une nouvelle mécanique.",
+          }
+        : null,
+
+    EVIDENCE_SOURCES: {
+      meaning:
+        "Liste canonique des identifiants réellement visibles dans PRIMARY_PROJECT_DOSSIER. Recopie exactement un identifiant présent ici dans evidence.source.",
+      sources: evidenceSources,
+    },
+
+    REPOSITORY_OVERVIEW: repositoryOverview,
+
+    USER_REQUEST_FINAL: question,
+  };
+
+  const serialized = JSON.stringify(input);
+
+  if (serialized.length <= MAX_COMPANION_INPUT_CHARS) {
+    return serialized;
+  }
+
+  return JSON.stringify({
+    ...input,
+    PROJECT_MEMORY: {
+      ...input.PROJECT_MEMORY,
+      recent_tasks: input.PROJECT_MEMORY.recent_tasks.slice(0, 6),
+      recent_decisions: input.PROJECT_MEMORY.recent_decisions.slice(0, 8),
+      recent_activities: input.PROJECT_MEMORY.recent_activities.slice(0, 10),
+    },
+    REPOSITORY_OVERVIEW: input.REPOSITORY_OVERVIEW.map(
+      (repository) => ({
+        ...repository,
+        repository_tree: repository.repository_tree.slice(0, 40),
+        readme: compactCompanionText(repository.readme, 1_000),
+      }),
+    ),
   });
 }
 
 function buildProjectCompanionInstructions(): string {
   return [
     "Tu es le compagnon de bord permanent d'un projet de développement.",
-    "Tu dois comprendre le projet comme un ensemble cohérent, pas comme une liste de fichiers.",
+    "Tu es le cerveau généraliste qui aide l'utilisateur à comprendre, décider, construire, tester et faire évoluer ses projets.",
+    "Tu ne fonctionnes pas comme un mode planning, audit ou ticket finder isolé.",
     "",
-    "Ta mission : répondre à la question de l'utilisateur ET lui apporter la vision d'ensemble qu'un lead technique/design expérimenté aurait en regardant ce projet.",
+    "Tu disposes de la mémoire Project OS et du contexte GitHub de tous les dépôts connectés.",
+    "Pour une demande de prochaine étape, PRIMARY_PROJECT_DOSSIER est placé volontairement au centre du contexte et doit être lu en premier.",
+    "Le dépôt, ses fichiers sélectionnés et ses anciennes informations ne doivent jamais écraser une priorité explicite plus récente du dossier.",
     "",
-    "SOURCES ET PRIORITÉ :",
-    "1. USER_QUESTION est la question exacte à laquelle tu dois répondre.",
-    "2. JOURNAL_AUDIT est la photographie technique la plus récente du projet et prime sur les descriptions historiques lorsqu'elles se contredisent avec le code.",
-    "3. JOURNAL_DESIGN décrit les intentions, priorités et pistes de roadmap ; il ne prouve pas qu'une idée est implémentée.",
-    "4. active_tasks et active_decisions décrivent les engagements actuels du projet.",
-    "5. CODE_CONTEXT montre ce qui est réellement présent dans les fichiers fournis.",
-    "6. REPOSITORY_OVERVIEW donne la vision plus large du dépôt.",
-    "7. Les activités récentes sont un historique utile, pas une preuve qu'un comportement est encore présent.",
+    "Pour une demande de prochaine étape, commence par les priorités explicites de PRIMARY_PROJECT_DOSSIER. Ne remplace pas une priorité existante par une idée générique.",
+    "CURRENT_PLANNING_PRIORITIES contient les priorités extraites du journal de référence.",
+    "Lorsque MANDATORY_FIRST_DIRECTION existe, la première recommendation.priority_id doit être exactement son priority_id.",
+    "La première recommandation doit développer cette priorité sans la remplacer par une nouvelle mécanique.",
+    "Ne modifie jamais une quantité, un nombre de lancers, un nombre de tests ou une valeur explicitement donnée par une source. Reprends les unités et les termes de la source.",
+
+    "Si le projet est déjà en phase de consolidation, calibration ou polish, ne reviens pas artificiellement à la construction de nouvelles mécaniques.",
     "",
-    "RÈGLE CENTRALE : distingue toujours quatre états :",
-    "- IMPLEMENTÉ = observable dans le code actuel.",
-    "- DÉCIDÉ = choisi dans Project OS mais pas forcément implémenté.",
-    "- PLANIFIÉ / IDÉE = présent dans le journal ou une réflexion mais pas validé comme travail actuel.",
-    "- INCONNU = impossible à confirmer avec le contexte fourni.",
+    "DISTINCTION :",
+    "- IMPLEMENTÉ = présent dans le code fourni.",
+    "- DÉCIDÉ = choisi dans Project OS mais pas nécessairement implémenté.",
+    "- PLANIFIÉ = présent dans le journal, la roadmap ou une idée.",
+    "- INCONNU = non démontrable avec le contexte.",
+    "- OPINION = ton jugement stratégique, clairement présenté comme tel.",
     "",
-    "Ne transforme jamais une idée du journal en fonctionnalité existante.",
-    "Ne transforme jamais l'absence d'un fichier sélectionné en absence de fonctionnalité dans tout le dépôt.",
-    "Ne cherche pas artificiellement un bug pour avoir quelque chose à proposer.",
-    "Ne propose pas de reconstruire un système déjà présent sans symptôme ou raison concrète.",
+    "Ne fabrique jamais un bug, un diagnostic, une métrique, une quantité de playtests ou un besoin pour avoir quelque chose à proposer.",
+    "Une présence de debug log n'est pas automatiquement un problème prioritaire.",
+    "Une possibilité théorique n'est pas un problème détecté.",
+    "Ne propose jamais de refaire un système déjà présent sans symptôme, contrainte ou bénéfice concret.",
     "",
-    "QUAND L'UTILISATEUR DEMANDE 'QUOI FAIRE ENSUITE' :",
-    "Commence par identifier la phase réelle du projet.",
-    "Confronte le code actuel aux priorités du journal et aux décisions/tâches actives.",
-    "Choisis ensuite une recommandation principale qui fait avancer le projet dans la bonne direction.",
-    "La recommandation peut être technique, gameplay, UX, audio, visuelle, contenu, équilibrage, production ou préparation de release.",
-    "Ne la limite pas au fichier qui semble le plus facile à modifier.",
+    "POUR LES PROBLÈMES :",
+    "Ils doivent être ancrés dans une preuve réelle du contexte et relier si possible source → comportement → conséquence.",
     "",
-    "QUAND TU DONNES DES IDÉES :",
-    "Sépare clairement la recommandation immédiate des idées futures.",
-    "Évite les systèmes génériques ou à la mode qui ne servent pas le projet.",
-    "Pour chaque idée, explique pourquoi elle appartient à ce projet précisément.",
+    "POUR LES RECOMMANDATIONS :",
+    "Elles peuvent être nouvelles et venir de ton jugement, mais elles doivent découler du contexte du projet.",
+    "Une recommandation nouvelle doit être explicitement présentée comme ton avis si elle ne vient pas d'une priorité existante.",
     "",
-    "ESTIMATIONS :",
-    "Donne une estimation de travail honnête et grossière, par exemple '1-2 h', 'une demi-journée', '1-2 jours'.",
-    "L'estimation doit inclure les hypothèses importantes et ne doit pas être présentée comme une mesure précise.",
+    "POUR LES DEMANDES 'QUOI FAIRE ENSUITE' :",
+    "Si PROJECT_COMPANION_REQUEST.is_planning_request est true, donne au moins une recommandation concrète.",
+    "La recommandation principale doit être cohérente avec la phase réelle du projet et les priorités actuelles.",
+    "Donne une estimation honnête et explique brièvement ce que l'utilisateur doit observer ou valider.",
     "",
-    "ANALYSE DU CODE :",
-    "Suis les responsabilités entre les fichiers avant de conclure.",
-    "Pour un bug, explique la chaîne causale code → comportement → conséquence.",
-    "Pour une amélioration, explique capacité actuelle → limite/opportunité → bénéfice de l'évolution.",
-    "Si le code et le journal se contredisent, signale la contradiction au lieu de choisir silencieusement une version.",
+    "POUR LES DEMANDES SIMPLES :",
+    "Réponds simplement. Les sections état/directions/problèmes sont facultatives sauf si la question nécessite une analyse de projet.",
     "",
-    "STYLE DE RÉPONSE :",
-    "Réponds comme un compagnon de développement : direct, concret, critique quand nécessaire.",
-    "Ne récite pas le dépôt.",
-    "Ne produit pas un audit générique si la question est précise.",
-    "Mais ne te prive pas d'utiliser la vision d'ensemble du projet pour améliorer la réponse.",
-    "Tu peux dire explicitement 'je ne ferais pas X maintenant' avec une justification technique ou design.",
+    "PREUVES OBLIGATOIRES :",
+    "Chaque recommandation et chaque problème doit fournir au moins une preuve {source, excerpt}.",
+    "EVIDENCE_SOURCES est la liste canonique des identifiants autorisés pour evidence.source.",
+    "Recopie evidence.source caractère pour caractère depuis EVIDENCE_SOURCES.sources. Ne reconstruis jamais toi-même un identifiant repo:path.",
+    "evidence.excerpt doit être copié verbatim depuis le contenu de cette source, sans paraphrase, et faire entre 8 et 500 caractères.",
+    "Pour les demandes de prochaine étape, PRIMARY_PROJECT_DOSSIER est la source de vérité pour la phase actuelle et les priorités explicites.",
+    "Pour une demande de prochaine étape, ne propose pas la construction d'un système simplement parce qu'il n'apparaît pas dans les fichiers sélectionnés : l'absence d'un fichier fourni ne démontre pas l'absence du système.",
+    "Si le dossier indique explicitement une phase de consolidation, calibration, game feel, stabilisation ou publication, ne reviens pas à la construction de nouvelles mécaniques sans preuve plus récente qui le justifie.",
+    "Quand une priorité explicite existe dans le dossier, commence par elle avant toute recommandation nouvelle.",
+    "Pour la première recommandation, l'évidence principale doit reprendre la source et l'extrait de MANDATORY_FIRST_DIRECTION.",
+    "N'invente pas d'objectif de mesure, de métrique ou de critère d'évaluation absent de la priorité citée ; présente-le comme une opinion séparée si tu veux en proposer un.",
+
+    "Ne cite jamais un fichier ou un document simplement parce que son nom existe dans l'arborescence.",
     "",
     "FORMAT :",
     "Retourne uniquement un JSON valide conforme au schéma.",
-    "answer doit être la réponse naturelle à l'utilisateur, concise mais substantielle.",
-    "current_state résume où en est réellement le projet.",
-    "recommendation est UNE seule prochaine action principale.",
-    "ideas contient 0 à 4 idées complémentaires.",
-    "watchouts contient 0 à 4 risques ou pièges importants.",
-    "uncertainties contient uniquement les inconnues pertinentes.",
-    "references contient les chemins de fichiers, noms de documents ou sections du journal réellement utilisés.",
+    "answer doit être non vide.",
+    "project_state peut être vide lorsque ce n'est pas pertinent.",
+    "Pour une demande de prochaine étape, recommendations doit contenir au moins un élément.",
+    "problems peut être vide.",
+    "unknowns contient uniquement les inconnues utiles.",
+    "references contient les sources effectivement utilisées.",
   ].join("\n");
 }
 
-function parseProjectCompanionResponse(content: string): ProjectCompanionResponse {
+function normalizeEvidenceFragment(value: string): string {
+  return value
+    .replace(/\r/g, "")
+    .replace(/\s+/g, " ")
+    .trim()
+    .toLowerCase();
+}
+
+function buildCompanionEvidenceIndex(
+  context: ProjectAiContext,
+): Map<string, string> {
+  const index = new Map<string, string>();
+  const repositories =
+    context.repositories?.length > 0
+      ? context.repositories
+      : [context];
+
+  index.set(
+    "PROJECT_OS:project",
+    JSON.stringify(context.project_os.project),
+  );
+  index.set(
+    "PROJECT_OS:tasks",
+    JSON.stringify({
+      active_tasks: context.project_os.active_tasks,
+      recent_tasks: context.project_os.tasks,
+    }),
+  );
+  index.set(
+    "PROJECT_OS:decisions",
+    JSON.stringify({
+      active_decisions: context.project_os.active_decisions,
+      recent_decisions: context.project_os.decisions,
+    }),
+  );
+  index.set(
+    "PROJECT_OS:activities",
+    JSON.stringify(context.project_os.recent_activities),
+  );
+
+  for (const repository of repositories) {
+    const prefix = repository.repository.full_name;
+
+    for (const document of repository.project_documents) {
+      index.set(
+        prefix + ":" + document.path,
+        document.content,
+      );
+    }
+
+    for (const file of repository.selected_files) {
+      index.set(
+        prefix + ":" + file.path,
+        file.content,
+      );
+    }
+
+    if (repository.readme) {
+      index.set(prefix + ":README", repository.readme);
+    }
+
+    if (repository.package_json) {
+      index.set(
+        prefix + ":package.json",
+        JSON.stringify(repository.package_json),
+      );
+    }
+  }
+
+  return index;
+}
+
+function resolveCompanionEvidenceSource(
+  sourceId: string,
+  evidenceIndex: Map<string, string>,
+): string | null {
+  const exact = sourceId.trim();
+
+  if (evidenceIndex.has(exact)) {
+    return exact;
+  }
+
+  const normalized = normalizeEvidenceFragment(exact);
+
+  const candidates = [...evidenceIndex.keys()].filter((candidate) => {
+    const normalizedCandidate = normalizeEvidenceFragment(candidate);
+
+    return (
+      normalizedCandidate.endsWith(":" + normalized) ||
+      normalizedCandidate.endsWith("/" + normalized)
+    );
+  });
+
+  return candidates.length === 1 ? candidates[0] : null;
+}
+
+function isGroundedEvidence(
+  evidence: CompanionEvidence,
+  evidenceIndex: Map<string, string>,
+): boolean {
+  if (!evidence.source || !evidence.excerpt) {
+    return false;
+  }
+
+  const resolvedSource = resolveCompanionEvidenceSource(
+    evidence.source,
+    evidenceIndex,
+  );
+
+  if (!resolvedSource) {
+    return false;
+  }
+
+  const source = evidenceIndex.get(resolvedSource);
+
+  if (!source) {
+    return false;
+  }
+
+  const excerpt = normalizeEvidenceFragment(evidence.excerpt);
+
+  if (excerpt.length < 8 || excerpt.length > 500) {
+    return false;
+  }
+
+  return normalizeEvidenceFragment(source).includes(excerpt);
+}
+
+function parseProjectCompanionResponse(
+  content: string,
+  context: ProjectAiContext,
+  question: string,
+): ProjectCompanionResponse {
   const parsed = parseJsonObject(content);
 
   if (!parsed || typeof parsed !== "object") {
-    throw new Error("La réponse IA du compagnon de projet n'est pas un JSON exploitable.");
+    throw new Error(
+      "La réponse du compagnon n'est pas un JSON exploitable.",
+    );
   }
 
   const value = parsed as Record<string, unknown>;
-  const recommendation = value.recommendation;
+  const evidenceIndex = buildCompanionEvidenceIndex(context);
+
+  const planningRequest = isPlanningQuestion(question);
 
   if (
     typeof value.answer !== "string" ||
-    typeof value.current_state !== "string" ||
-    !recommendation ||
-    typeof recommendation !== "object" ||
-    typeof (recommendation as Record<string, unknown>).title !== "string" ||
-    typeof (recommendation as Record<string, unknown>).why_now !== "string" ||
-    typeof (recommendation as Record<string, unknown>).effort !== "string" ||
-    typeof (recommendation as Record<string, unknown>).expected_result !== "string" ||
-    typeof (recommendation as Record<string, unknown>).success_criteria !== "string" ||
-    !Array.isArray((recommendation as Record<string, unknown>).files) ||
-    !Array.isArray(value.ideas) ||
-    !Array.isArray(value.watchouts) ||
-    !Array.isArray(value.uncertainties) ||
+    value.answer.trim().length === 0 ||
+    typeof value.project_state !== "string" ||
+    !Array.isArray(value.recommendations) ||
+    !Array.isArray(value.problems) ||
+    !Array.isArray(value.unknowns) ||
     !Array.isArray(value.references)
   ) {
-    throw new Error("La réponse IA du compagnon de projet n'est pas conforme.");
+    throw new Error(
+      "La réponse du compagnon est vide ou ne respecte pas le contrat attendu.",
+    );
   }
 
-  const rawRecommendation = recommendation as Record<string, unknown>;
-  const recommendationFiles = Array.isArray(rawRecommendation.files)
-    ? rawRecommendation.files.filter(
-        (item): item is string => typeof item === "string",
-      )
-    : [];
+  const parseEvidence = (value: unknown): CompanionEvidence[] => {
+    if (!Array.isArray(value)) {
+      return [];
+    }
 
-  return {
-    answer: value.answer,
-    current_state: value.current_state,
-    recommendation: {
-      title: rawRecommendation.title as string,
-      why_now: rawRecommendation.why_now as string,
-      effort: rawRecommendation.effort as string,
-      expected_result: rawRecommendation.expected_result as string,
-      success_criteria: rawRecommendation.success_criteria as string,
-      files: recommendationFiles,
-    },
-    ideas: value.ideas
+    return value
       .filter(
         (item): item is Record<string, unknown> =>
           !!item &&
           typeof item === "object" &&
-          typeof item.title === "string" &&
-          typeof item.rationale === "string" &&
-          typeof item.effort === "string" &&
-          (item.timing === "NOW" ||
-            item.timing === "NEXT" ||
-            item.timing === "LATER"),
+          typeof item.source === "string" &&
+          typeof item.excerpt === "string" &&
+          isGroundedEvidence(
+            {
+              source: item.source,
+              excerpt: item.excerpt,
+            },
+            evidenceIndex,
+          ),
       )
-      .map((item) => ({
-        title: item.title as string,
-        rationale: item.rationale as string,
-        effort: item.effort as string,
-        timing: item.timing as "NOW" | "NEXT" | "LATER",
-      }))
-      .slice(0, 4),
-    watchouts: value.watchouts.filter(
-      (item): item is string => typeof item === "string",
-    ).slice(0, 4),
-    uncertainties: value.uncertainties.filter(
-      (item): item is string => typeof item === "string",
-    ).slice(0, 6),
-    references: value.references.filter(
-      (item): item is string => typeof item === "string",
-    ).slice(0, 10),
+      .map((item) => {
+        const source =
+          resolveCompanionEvidenceSource(
+            item.source as string,
+            evidenceIndex,
+          ) ?? (item.source as string);
+
+        return {
+          source,
+          excerpt: item.excerpt as string,
+        };
+      })
+      .slice(0, 3);
+  };
+
+  const recommendations = value.recommendations
+    .filter(
+      (item): item is Record<string, unknown> =>
+        !!item &&
+        typeof item === "object" &&
+        typeof item.title === "string" &&
+        item.title.trim().length > 0 &&
+        typeof item.why === "string" &&
+        typeof item.detail === "string" &&
+        typeof item.effort === "string" &&
+        (item.timing === "NOW" ||
+          item.timing === "NEXT" ||
+          item.timing === "LATER") &&
+        parseEvidence(item.evidence).length > 0,
+    )
+    .map((item) => ({
+      priority_id:
+        typeof item.priority_id === "string"
+          ? item.priority_id
+          : "",
+      title: item.title as string,
+      why: item.why as string,
+      detail: item.detail as string,
+      effort: item.effort as string,
+      timing: item.timing as "NOW" | "NEXT" | "LATER",
+      evidence: parseEvidence(item.evidence),
+    }))
+    .slice(0, 5);
+
+  const problems = value.problems
+    .filter(
+      (item): item is Record<string, unknown> =>
+        !!item &&
+        typeof item === "object" &&
+        typeof item.title === "string" &&
+        item.title.trim().length > 0 &&
+        typeof item.description === "string" &&
+        typeof item.impact === "string" &&
+        parseEvidence(item.evidence).length > 0,
+    )
+    .map((item) => ({
+      title: item.title as string,
+      description: item.description as string,
+      impact: item.impact as string,
+      evidence: parseEvidence(item.evidence),
+    }))
+    .slice(0, 5);
+
+  const planningPriority =
+    planningRequest
+      ? extractCurrentPlanningPriorities(context)[0]
+      : undefined;
+
+  if (planningRequest && planningPriority) {
+    const firstRecommendation = recommendations[0];
+
+    const validFirstRecommendation =
+      !!firstRecommendation &&
+      firstRecommendation.priority_id === planningPriority.id &&
+      firstRecommendation.evidence.some(
+        (evidence) =>
+          evidence.source === planningPriority.source &&
+          normalizeEvidenceFragment(planningPriority.excerpt).includes(
+            normalizeEvidenceFragment(evidence.excerpt),
+          ),
+      );
+
+    if (!validFirstRecommendation) {
+      throw new Error(
+        "La première direction du compagnon ne respecte pas la priorité actuelle du projet.",
+      );
+    }
+
+    recommendations[0] = {
+      ...recommendations[0],
+      priority_id: planningPriority.id,
+      title: planningPriority.title,
+      detail: planningPriority.content,
+      evidence: [
+        {
+          source: planningPriority.source,
+          excerpt: planningPriority.excerpt,
+        },
+      ],
+    };
+  }
+
+  if (planningRequest && recommendations.length === 0) {
+    throw new Error(
+      "La réponse du compagnon ne contient aucune direction pour une demande de prochaine étape.",
+    );
+  }
+
+  return {
+    answer: value.answer,
+    project_state: value.project_state,
+    recommendations,
+    problems,
+    unknowns: value.unknowns
+      .filter(
+        (item): item is string =>
+          typeof item === "string" && item.trim().length > 0,
+      )
+      .slice(0, 6),
+    references: value.references
+      .filter(
+        (item): item is string =>
+          typeof item === "string" && item.trim().length > 0,
+      )
+      .slice(0, 12),
   };
 }
 
 function renderProjectCompanionResponse(
   result: ProjectCompanionResponse,
 ): string {
-  return [
-    "## Compagnon de bord",
-    "",
-    result.answer,
-    "",
-    "### Où en est le projet",
-    result.current_state,
-    "",
-    "### Ma recommandation",
-    "**" + result.recommendation.title + "**",
-    "",
-    result.recommendation.why_now,
-    "",
-    "**Effort estimé :** " + result.recommendation.effort,
-    "",
-    "**Résultat attendu :** " + result.recommendation.expected_result,
-    "",
-    "**Critère de réussite :** " + result.recommendation.success_criteria,
-    ...(result.recommendation.files.length > 0
-      ? [
-          "",
-          "**Fichiers concernés :**",
-          ...result.recommendation.files.map((file) => "• " + file),
-        ]
-      : []),
-    ...(result.ideas.length > 0
-      ? [
-          "",
-          "### Idées à garder en réserve",
-          ...result.ideas.map(
-            (idea) =>
-              "• **" +
-              idea.title +
-              "** [" +
-              idea.timing +
-              " — " +
-              idea.effort +
-              "] — " +
-              idea.rationale,
-          ),
-        ]
-      : []),
-    ...(result.watchouts.length > 0
-      ? [
-          "",
-          "### Points de vigilance",
-          ...result.watchouts.map((item) => "• " + item),
-        ]
-      : []),
-    ...(result.uncertainties.length > 0
-      ? [
-          "",
-          "### Incertitudes",
-          ...result.uncertainties.map((item) => "• " + item),
-        ]
-      : []),
-    ...(result.references.length > 0
-      ? [
-          "",
-          "### Sources consultées",
-          ...result.references.map((item) => "• " + item),
-        ]
-      : []),
-  ].join("\n");
+  const lines = ["## Compagnon de bord", "", result.answer];
+
+  if (result.project_state.trim()) {
+    lines.push("", "### Où en est le projet", result.project_state);
+  }
+
+  if (result.recommendations.length > 0) {
+    lines.push("", "### Directions");
+
+    for (const recommendation of result.recommendations) {
+      lines.push(
+        "",
+        "**" + recommendation.title + "** [" +
+          recommendation.timing + " — " +
+          recommendation.effort + "]",
+        recommendation.why,
+        recommendation.detail,
+        "Preuves : " +
+          recommendation.evidence
+            .map((item) => item.source)
+            .join(" | "),
+      );
+    }
+  }
+
+  if (result.problems.length > 0) {
+    lines.push("", "### Problèmes détectés");
+
+    for (const problem of result.problems) {
+      lines.push(
+        "",
+        "**" + problem.title + "**",
+        problem.description,
+        "Impact : " + problem.impact,
+        "Preuves : " +
+          problem.evidence.map((item) => item.source).join(" | "),
+      );
+    }
+  }
+
+  if (result.unknowns.length > 0) {
+    lines.push(
+      "",
+      "### Points à vérifier",
+      ...result.unknowns.map((item) => "• " + item),
+    );
+  }
+
+  if (result.references.length > 0) {
+    lines.push(
+      "",
+      "### Sources utilisées",
+      ...result.references.map((item) => "• " + item),
+    );
+  }
+
+  return lines.join("\n");
+}
+
+function buildPlanningFallbackResponse(
+  context: ProjectAiContext,
+): string {
+  const priority = extractCurrentPlanningPriorities(context)[0];
+
+  if (!priority) {
+    throw new Error(
+      "Impossible de déterminer la priorité actuelle du projet depuis son document de référence.",
+    );
+  }
+
+  return renderProjectCompanionResponse({
+    answer:
+      "La direction actuelle est explicitement définie dans le journal du projet. Je pars de cette priorité réelle plutôt que d'inventer une nouvelle mécanique.",
+    project_state:
+      context.project_os.project.current_state ??
+      "État courant non renseigné dans Project OS.",
+    recommendations: [
+      {
+        priority_id: priority.id,
+        title: priority.title,
+        why:
+          "Cette direction correspond à la première priorité explicite du document de référence actuel.",
+        detail: priority.content,
+        effort: "À valider",
+        timing: "NOW",
+        evidence: [
+          {
+            source: priority.source,
+            excerpt: priority.excerpt,
+          },
+        ],
+      },
+    ],
+    problems: [],
+    unknowns: [
+      "La réponse IA n'a pas respecté le contrat de priorité ; cette direction provient directement du document de référence du projet.",
+    ],
+    references: [priority.source],
+  });
 }
 
 async function requestProjectCompanion(
   context: ProjectAiContext,
   question: string,
+  retryHint = "",
 ): Promise<string> {
   const input = buildProjectCompanionInput(context, question);
   const instructions = buildProjectCompanionInstructions();
 
   return requestProjectAskStructured(
     input,
-    instructions,
+    retryHint
+      ? [instructions, "", retryHint].join("\n")
+      : instructions,
     PROJECT_COMPANION_SCHEMA,
   );
 }
@@ -1869,29 +2528,48 @@ function requestProjectAskStructured(
         }
 
         const fallback = getOllamaConfig();
-        const response = await callOllama(fallback.url, {
-          model: fallback.model,
-          stream: false,
-          think: fallback.think,
-          format: schema,
-          messages: [
-            { role: "system", content: instructions },
-            { role: "user", content: input },
-          ],
-          options: {
-            temperature: 0,
-          },
-        });
 
-        const content = response.message?.content?.trim() ?? "";
+        try {
+          const response = await callOllama(fallback.url, {
+            model: fallback.model,
+            stream: false,
+            think: false,
+            format: schema,
+            messages: [
+              { role: "system", content: instructions },
+              { role: "user", content: input },
+            ],
+            options: {
+              temperature: 0,
+            },
+          });
 
-        if (!content) {
+          const content = response.message?.content?.trim() ?? "";
+
+          if (!content) {
+            throw new Error(
+              "Ollama n'a renvoyé aucun contenu exploitable" +
+                (response.done_reason
+                  ? " (done_reason=" + response.done_reason + ")"
+                  : "") +
+                ".",
+            );
+          }
+
+          return content;
+        } catch (fallbackError) {
+          const original =
+            error instanceof Error ? error.message : String(error);
+          const fallbackMessage =
+            fallbackError instanceof Error
+              ? fallbackError.message
+              : String(fallbackError);
+
           throw new Error(
-            "Gemini est indisponible et le modèle de secours Ollama n'a renvoyé aucun contenu exploitable.",
+            "Gemini indisponible (" + original +
+              "). Fallback Ollama échoué : " + fallbackMessage,
           );
         }
-
-        return content;
       });
   }
 
@@ -1900,7 +2578,7 @@ function requestProjectAskStructured(
   return callOllama(config.url, {
     model: config.model,
     stream: false,
-    think: config.think,
+    think: false,
     format: schema,
     messages: [
       { role: "system", content: instructions },
@@ -1913,7 +2591,13 @@ function requestProjectAskStructured(
     const content = response.message?.content?.trim() ?? "";
 
     if (!content) {
-      throw new Error("Ollama n'a renvoyé aucun contenu exploitable.");
+      throw new Error(
+        "Ollama n'a renvoyé aucun contenu exploitable" +
+          (response.done_reason
+            ? " (done_reason=" + response.done_reason + ")"
+            : "") +
+          ".",
+      );
     }
 
     return content;
@@ -1924,10 +2608,58 @@ export async function askProjectWithAI(
   context: ProjectAiContext,
   question: string,
 ): Promise<string> {
-  const raw = await requestProjectCompanion(context, question);
-  return renderProjectCompanionResponse(
-    parseProjectCompanionResponse(raw),
-  );
+  let lastError: unknown = null;
+
+  for (let attempt = 0; attempt < 2; attempt += 1) {
+    try {
+      const raw = await requestProjectCompanion(
+        context,
+        question,
+        attempt === 1
+          ? [
+              "La tentative précédente a été rejetée par le validateur de grounded evidence.",
+              "Pour chaque recommandation, evidence doit contenir au moins un objet valide.",
+              "Utilise uniquement un source présent exactement dans EVIDENCE_SOURCES.sources.",
+              "Copie verbatim dans excerpt un passage de 8 à 500 caractères provenant de cette même source.",
+              "Pour une demande de prochaine étape, donne au moins une direction concrète cohérente avec les priorités actuelles.",
+              "Ne renvoie pas seulement une opinion générale ou une direction sans preuve.",
+            ].join(" ")
+          : "",
+      );
+
+      return renderProjectCompanionResponse(
+        parseProjectCompanionResponse(raw, context, question),
+      );
+    } catch (error) {
+      lastError = error;
+
+      if (attempt === 0 && error instanceof Error) {
+        const message = error.message.toLowerCase();
+
+        if (
+          message.includes("json exploitable") ||
+          message.includes("contrat attendu") ||
+          message.includes("réponse du compagnon")
+        ) {
+          continue;
+        }
+      }
+
+      break;
+    }
+  }
+
+  if (isPlanningQuestion(question)) {
+    try {
+      return buildPlanningFallbackResponse(context);
+    } catch {
+      // Keep the original AI error if no planning priority can be resolved.
+    }
+  }
+
+  throw lastError instanceof Error
+    ? lastError
+    : new Error("Le compagnon n'a pas pu produire de réponse.");
 }
 
 export async function reviewProjectWithAI(
