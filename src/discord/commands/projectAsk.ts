@@ -5,7 +5,7 @@ import { askProjectWithAI } from "../../services/aiService.js";
 import { replyLong } from "../utils/replyLong.js";
 
 export const projectAskCommand={
- data:new SlashCommandBuilder().setName("project-ask").setDescription("Pose une question sur le contexte d'un projet")
+ data:new SlashCommandBuilder().setName("project-ask").setDescription("Discute avec le compagnon de bord du projet")
   .addStringOption(o=>o.setName("projet").setDescription("Projet").setRequired(true).setAutocomplete(true))
   .addStringOption(o=>o.setName("question").setDescription("Question").setRequired(true)),
  async execute(interaction:ChatInputCommandInteraction):Promise<void>{
