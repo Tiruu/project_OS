@@ -2496,7 +2496,10 @@ export async function askProjectWithAI(
     instructions,
     schema,
   );
-  let result = parseProjectAskResult(raw, "PLANNING");
+  let result = parseProjectAskResult(
+    raw,
+    "PLANNING",
+  ) as ProjectAskPlanning;
 
   let grounding = await verifyProjectAskPlanning(
     context,
@@ -2542,7 +2545,10 @@ export async function askProjectWithAI(
       repairInstructions,
       schema,
     );
-    result = parseProjectAskResult(raw, "PLANNING");
+    result = parseProjectAskResult(
+      raw,
+      "PLANNING",
+    ) as ProjectAskPlanning;
 
     grounding = await verifyProjectAskPlanning(
       context,
