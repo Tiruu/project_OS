@@ -2340,6 +2340,17 @@ function parseProjectCompanionResponse(
         },
       ],
     };
+
+    value.answer =
+      "La prochaine étape est d'abord de suivre la priorité " +
+      planningPriority.id +
+      " du journal du projet : " +
+      planningPriority.title +
+      ".";
+
+    value.project_state =
+      context.project_os.project.current_state ??
+      "La phase et la priorité actuelles sont définies par le journal de référence du projet.";
   }
 
   if (planningRequest && recommendations.length === 0) {
