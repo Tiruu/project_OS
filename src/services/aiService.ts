@@ -1555,6 +1555,15 @@ const PROJECT_ASK_MODE_SCHEMA = {
   },
 } as const;
 
+const PROJECT_ASK_GROUNDING_SCHEMA = {
+  type: "object",
+  required: ["grounded", "issues"],
+  properties: {
+    grounded: { type: "boolean" },
+    issues: { type: "array", items: { type: "string" } },
+  },
+} as const;
+
 function buildProjectAskModeInput(
   context: ProjectAiContext,
   question: string,
@@ -1742,6 +1751,81 @@ function getProjectAskSchema(mode: ProjectAskMode) {
   if (mode === "PLANNING") return PROJECT_ASK_PLANNING_SCHEMA;
   if (mode === "FEATURE") return PROJECT_ASK_FEATURE_SCHEMA;
   return PROJECT_ASK_GENERAL_SCHEMA;
+}
+
+function buildProjectAskGroundingInput(
+  context: ProjectAiContext,
+  question: string,
+  draft: ProjectAskPlanning,
+): string {
+  return JSON.stringify({
+    question,
+    draft,
+    active_tasks: context.project_os.active_tasks,
+    active_decisions: context.project_os.active_decisions,
+    recent_activities: context.project_os.recent_activities,
+    selected_files: context.selected_files.map((file) => ({
+      path: file.path,
+      reason: file.reason,
+      truncated: file.truncated,
+      total_chars: file.total_chars,
+      content: file.content,
+    })),
+    repository_tree: context.repository_tree,
+  });
+}
+
+function buildProjectAskGroundingInstructions(): string {
+  return [
+    "Tu es le vérificateur de grounding de Project OS.",
+    "Ta seule mission est de vérifier si une proposition PLANNING est démontrable à partir du contexte fourni.",
+    "",
+    "RÈGLE ABSOLUE : une affirmation sur le comportement actuel du code doit être soutenue par le contenu actuel des fichiers fournis.",
+    "Un chemin dans repository_tree prouve seulement qu'un fichier existe, pas ce qu'il fait.",
+    "Si selected_files.truncated=true, l'extrait ne permet jamais de conclure qu'une fonction, un appel ou un comportement est absent de ce fichier.",
+    "Les recent_activities sont historiques et ne peuvent jamais prouver qu'un bug existe encore aujourd'hui.",
+    "Les active_tasks et active_decisions décrivent des éléments encore ouverts/actifs, mais ne prouvent pas qu'une tâche est techniquement nécessaire si le code la contredit.",
+    "Si le brouillon affirme qu'un comportement n'existe pas, vérifie que le contexte contient réellement les fichiers et la chaîne d'appels nécessaires pour démontrer cette absence.",
+    "En cas de doute ou d'information manquante, grounded=false.",
+    "Si une seule affirmation centrale du brouillon n'est pas démontrable, grounded=false.",
+    "",
+    "issues doit lister brièvement chaque affirmation insuffisamment démontrée.",
+    "Retourne uniquement le JSON du schéma fourni.",
+  ].join("\n");
+}
+
+async function verifyProjectAskPlanning(
+  context: ProjectAiContext,
+  question: string,
+  draft: ProjectAskPlanning,
+): Promise<{ grounded: boolean; issues: string[] }> {
+  const raw = await requestProjectAskStructured(
+    buildProjectAskGroundingInput(context, question, draft),
+    buildProjectAskGroundingInstructions(),
+    PROJECT_ASK_GROUNDING_SCHEMA,
+  );
+
+  const parsed = parseJsonObject(raw);
+
+  if (!parsed || typeof parsed !== "object") {
+    throw new Error("Le vérificateur de grounding de /project-ask n'a pas renvoyé de JSON exploitable.");
+  }
+
+  const value = parsed as Record<string, unknown>;
+
+  if (
+    typeof value.grounded !== "boolean" ||
+    !Array.isArray(value.issues)
+  ) {
+    throw new Error("La vérification de grounding de /project-ask est invalide.");
+  }
+
+  return {
+    grounded: value.grounded,
+    issues: value.issues.filter(
+      (item): item is string => typeof item === "string",
+    ),
+  };
 }
 
 function parseProjectAskResult(
@@ -1959,8 +2043,78 @@ export async function askProjectWithAI(
   const input = buildProjectAskInput(context, question, mode);
   const instructions = buildProjectAskInstructions(mode);
   const schema = getProjectAskSchema(mode);
-  const raw = await requestProjectAskStructured(input, instructions, schema);
-  const result = parseProjectAskResult(raw, mode);
+
+  let raw = await requestProjectAskStructured(
+    input,
+    instructions,
+    schema,
+  );
+  let result = parseProjectAskResult(raw, mode);
+
+  if (mode === "PLANNING") {
+    let grounding = await verifyProjectAskPlanning(
+      context,
+      question,
+      result as ProjectAskPlanning,
+    );
+
+    if (!grounding.grounded) {
+      const repairInstructions = [
+        instructions,
+        "",
+        "CONTRÔLE DE GROUNDING ÉCHOUÉ.",
+        "Le brouillon précédent contenait des affirmations insuffisamment démontrées.",
+        "Problèmes détectés :",
+        ...grounding.issues.map((issue) => "- " + issue),
+        "",
+        "Réécris la proposition en retirant toute affirmation non démontrable.",
+        "Ne transforme jamais une hypothèse en BUG.",
+        "Si le contexte ne permet pas de prouver un comportement manquant ou incorrect, propose une vérification ciblée ou une modification dont la nécessité est directement démontrable.",
+      ].join("\n");
+
+      raw = await requestProjectAskStructured(
+        input,
+        repairInstructions,
+        schema,
+      );
+      result = parseProjectAskResult(raw, mode);
+
+      grounding = await verifyProjectAskPlanning(
+        context,
+        question,
+        result as ProjectAskPlanning,
+      );
+
+      if (!grounding.grounded) {
+        const conservativeFiles = context.selected_files
+          .filter((file) => !file.truncated)
+          .slice(0, 3)
+          .map((file) => file.path);
+
+        return renderProjectAskResult(
+          {
+            title: "Vérifier avant de modifier",
+            why_now:
+              "Le contexte GitHub fourni ne permet pas de démontrer avec suffisamment de certitude une prochaine modification précise sans risque d'inventer un comportement.",
+            files: conservativeFiles,
+            expected:
+              "Identifier dans le code complet la responsabilité exacte du comportement à modifier avant de créer la tâche.",
+            success:
+              "La responsabilité et le comportement à modifier sont confirmés directement dans les fichiers concernés.",
+            evidence:
+              grounding.issues.length > 0
+                ? grounding.issues.map(
+                    (issue) => "GROUNDING: " + issue,
+                  )
+                : [
+                    "GROUNDING: la proposition n'a pas pu être démontrée à partir du contexte actuel.",
+                  ],
+          },
+          mode,
+        );
+      }
+    }
+  }
 
   return renderProjectAskResult(result, mode);
 }
