@@ -2042,10 +2042,10 @@ function selectRelevantText(
 }
 
 type CompanionRetrievalCandidate = {
-  repository: GithubRepositoryContext;
+  repository: ProjectAiContext["repositories"][number];
   source: string;
   path: string;
-  kind: "JOURNAL_AUDIT" | "PROJECT_DOCUMENT" | "CODE_OR_DOCUMENT";
+  kind: "JOURNAL_AUDIT" | "JOURNAL_DESIGN" | "PROJECT_DOCUMENT" | "CODE_OR_DOCUMENT";
   content: string;
   score: number;
 };
