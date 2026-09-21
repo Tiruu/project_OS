@@ -1811,7 +1811,7 @@ function parseProjectAskResult(
       success: value.success,
       evidence: value.evidence
         .filter(
-          (item): item is Record<string, unknown> =>
+          (item): item is { file: string; quote: string } =>
             !!item &&
             typeof item === "object" &&
             typeof item.file === "string" &&
