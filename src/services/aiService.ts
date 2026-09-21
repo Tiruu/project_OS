@@ -1883,6 +1883,7 @@ function parseProjectAskDiagnosis(
     unknowns,
     confidence,
   };
+}
 
 function buildProjectAskDiagnosisReviewInput(
   context: ProjectAiContext,
