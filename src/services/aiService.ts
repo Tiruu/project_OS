@@ -1858,6 +1858,7 @@ async function requestProjectAskStructured(
         error instanceof Error &&
         (
           error.message.startsWith("GEMINI_RATE_LIMIT:") ||
+          error.message.startsWith("GEMINI_SERVICE_UNAVAILABLE:") ||
           error.message.includes("sans contenu exploitable")
         )
       ) {
@@ -1881,7 +1882,9 @@ async function requestProjectAskStructured(
           return content;
         }
 
-        throw new Error("Ollama n'a renvoyé aucun contenu exploitable.");
+        throw new Error(
+          "Gemini est indisponible et le modèle de secours Ollama n'a renvoyé aucun contenu exploitable.",
+        );
       }
 
       throw error;
