@@ -1564,6 +1564,70 @@ const PROJECT_ASK_GROUNDING_SCHEMA = {
   },
 } as const;
 
+type ProjectAskDiagnosisStatus =
+  | "VERIFIED_DEFECT"
+  | "ACTIVE_TASK"
+  | "GROUNDED_IMPROVEMENT"
+  | "INDETERMINATE";
+
+type ProjectAskDiagnosis = {
+  status: ProjectAskDiagnosisStatus;
+  title: string;
+  problem: string;
+  why_now: string;
+  files: string[];
+  evidence: string[];
+  counterevidence: string[];
+  causal_chain: string[];
+  unknowns: string[];
+  confidence: number;
+};
+
+const PROJECT_ASK_DIAGNOSIS_SCHEMA = {
+  type: "object",
+  required: [
+    "status",
+    "title",
+    "problem",
+    "why_now",
+    "files",
+    "evidence",
+    "counterevidence",
+    "causal_chain",
+    "unknowns",
+    "confidence",
+  ],
+  properties: {
+    status: {
+      type: "string",
+      enum: [
+        "VERIFIED_DEFECT",
+        "ACTIVE_TASK",
+        "GROUNDED_IMPROVEMENT",
+        "INDETERMINATE",
+      ],
+    },
+    title: { type: "string" },
+    problem: { type: "string" },
+    why_now: { type: "string" },
+    files: { type: "array", items: { type: "string" } },
+    evidence: { type: "array", items: { type: "string" } },
+    counterevidence: { type: "array", items: { type: "string" } },
+    causal_chain: { type: "array", items: { type: "string" } },
+    unknowns: { type: "array", items: { type: "string" } },
+    confidence: { type: "number" },
+  },
+} as const;
+
+const PROJECT_ASK_DIAGNOSIS_REVIEW_SCHEMA = {
+  type: "object",
+  required: ["approved", "issues"],
+  properties: {
+    approved: { type: "boolean" },
+    issues: { type: "array", items: { type: "string" } },
+  },
+} as const;
+
 function buildProjectAskModeInput(
   context: ProjectAiContext,
   question: string,
@@ -1662,7 +1726,194 @@ function buildProjectAskInput(
   return JSON.stringify(payload);
 }
 
-function buildProjectAskInstructions(mode: ProjectAskMode): string {
+function buildProjectAskDiagnosisInput(
+  context: ProjectAiContext,
+  question: string,
+): string {
+  return JSON.stringify({
+    question,
+    project: context.project_os.project,
+    active_tasks: context.project_os.active_tasks,
+    active_decisions: context.project_os.active_decisions,
+    recent_activities: context.project_os.recent_activities.slice(0, 12),
+    selected_files: context.selected_files.map((file) => ({
+      path: file.path,
+      reason: file.reason,
+      truncated: file.truncated,
+      total_chars: file.total_chars,
+      content: file.content,
+    })),
+    repository_tree: context.repository_tree.slice(0, 180),
+  });
+}
+
+function buildProjectAskDiagnosisInstructions(): string {
+  return [
+    "Tu es le diagnosticien senior de Project OS.",
+    "Avant de proposer une prochaine modification, tu dois déterminer ce que le contexte permet réellement d'affirmer.",
+    "",
+    "STATUTS AUTORISÉS :",
+    "VERIFIED_DEFECT = défaut actuel démontré par le code fourni ou contradiction technique explicite avec une décision/tâche active.",
+    "ACTIVE_TASK = tâche active pertinente dont le code n'a pas démontré qu'elle est déjà résolue.",
+    "GROUNDED_IMPROVEMENT = amélioration de développement justifiée par le comportement actuel du code, sans prétendre qu'un bug existe.",
+    "INDETERMINATE = le contexte ne permet pas de trancher sans spéculation.",
+    "",
+    "HIÉRARCHIE DES PREUVES :",
+    "1. Code actuel fourni.",
+    "2. active_tasks et active_decisions.",
+    "3. repository_tree uniquement pour savoir qu'un fichier existe.",
+    "4. recent_activities uniquement comme historique et piste d'inspection, jamais comme preuve d'un bug actuel.",
+    "",
+    "MÉTHODE DE DIAGNOSTIC :",
+    "1. Formule une hypothèse précise sur le problème ou le prochain besoin.",
+    "2. Rassemble les preuves qui la soutiennent.",
+    "3. Rassemble activement les éléments qui la réfutent ou la rendent moins certaine.",
+    "4. Suis la chaîne causale complète : appel → état → condition → await → retour → signal → destruction/effet, selon le cas.",
+    "5. Distingue fait observé, inférence, hypothèse et préférence de conception.",
+    "6. Si une étape causale manque dans les fichiers fournis, note-la dans unknowns et choisis INDETERMINATE plutôt que d'inventer.",
+    "",
+    "RÈGLES IMPORTANTES :",
+    "Un motif de code suspect n'est pas un bug.",
+    "queue_free(), await, signal, coroutine, timeout, reparent ou autre primitive technique ne sont pas des preuves de défaut à eux seuls.",
+    "Une optimisation préventive n'est pas un VERIFIED_DEFECT.",
+    "Une fonctionnalité absente n'est pas automatiquement un problème.",
+    "Une tâche historique terminée n'est pas une tâche actuelle.",
+    "Une active_task pertinente reste une piste de planification, mais tu ne dois pas prétendre qu'elle est techniquement nécessaire si le code démontre déjà l'objectif.",
+    "Si le diagnostic est INDETERMINATE, ne force pas un défaut pour satisfaire la demande de 'suite du développement'.",
+    "Une confiance élevée exige une chaîne causale complète et au moins une preuve qui ne dépend pas d'une simple absence dans un extrait.",
+    "",
+    "selected_files peut être tronqué. Si truncated=true, il est interdit d'utiliser ce fichier pour prouver qu'une fonction, une branche ou un comportement est absent.",
+    "",
+    "Retourne uniquement un JSON conforme au schéma fourni.",
+  ].join("\n");
+}
+
+function parseProjectAskDiagnosis(
+  content: string,
+): ProjectAskDiagnosis {
+  const parsed = parseJsonObject(content);
+
+  if (!parsed || typeof parsed !== "object") {
+    throw new Error("Le diagnostic IA de /project-ask n'est pas un JSON exploitable.");
+  }
+
+  const value = parsed as Record<string, unknown>;
+
+  if (
+    (
+      value.status !== "VERIFIED_DEFECT" &&
+      value.status !== "ACTIVE_TASK" &&
+      value.status !== "GROUNDED_IMPROVEMENT" &&
+      value.status !== "INDETERMINATE"
+    ) ||
+    typeof value.title !== "string" ||
+    typeof value.problem !== "string" ||
+    typeof value.why_now !== "string" ||
+    !Array.isArray(value.files) ||
+    !Array.isArray(value.evidence) ||
+    !Array.isArray(value.counterevidence) ||
+    !Array.isArray(value.causal_chain) ||
+    !Array.isArray(value.unknowns) ||
+    typeof value.confidence !== "number"
+  ) {
+    throw new Error("Le diagnostic IA de /project-ask n'est pas conforme.");
+  }
+
+  return {
+    status: value.status,
+    title: value.title,
+    problem: value.problem,
+    why_now: value.why_now,
+    files: value.files.filter((item): item is string => typeof item === "string"),
+    evidence: value.evidence.filter((item): item is string => typeof item === "string"),
+    counterevidence: value.counterevidence.filter((item): item is string => typeof item === "string"),
+    causal_chain: value.causal_chain.filter((item): item is string => typeof item === "string"),
+    unknowns: value.unknowns.filter((item): item is string => typeof item === "string"),
+    confidence: Math.max(0, Math.min(1, value.confidence)),
+  };
+}
+
+function buildProjectAskDiagnosisReviewInput(
+  context: ProjectAiContext,
+  question: string,
+  diagnosis: ProjectAskDiagnosis,
+): string {
+  return JSON.stringify({
+    question,
+    diagnosis,
+    active_tasks: context.project_os.active_tasks,
+    active_decisions: context.project_os.active_decisions,
+    selected_files: context.selected_files.map((file) => ({
+      path: file.path,
+      truncated: file.truncated,
+      total_chars: file.total_chars,
+      content: file.content,
+    })),
+  });
+}
+
+function buildProjectAskDiagnosisReviewInstructions(): string {
+  return [
+    "Tu es le reviewer adversarial senior de Project OS.",
+    "Tu ne dois pas trouver une meilleure idée. Tu dois essayer de faire tomber le diagnostic.",
+    "",
+    "Pour chaque affirmation centrale du diagnostic, pose implicitement :",
+    "1. Quelle ligne ou chaîne d'appels démontre exactement cette affirmation ?",
+    "2. Quelle ligne ou branche pourrait la réfuter ?",
+    "3. Est-ce un bug actuel, une amélioration préventive, une tâche active ou simplement une hypothèse ?",
+    "4. Le diagnostic dépend-il d'un fichier tronqué ?",
+    "5. Une conclusion causale a-t-elle été remplacée par une simple coïncidence de deux lignes de code ?",
+    "",
+    "REJETTE le diagnostic si :",
+    "- il qualifie de bug un comportement seulement potentiellement problématique ;",
+    "- il déduit une absence depuis un fichier tronqué ou non fourni ;",
+    "- il utilise une recent_activity comme preuve d'un problème actuel ;",
+    "- il saute une étape importante de la chaîne causale ;",
+    "- il transforme une préférence de design en défaut technique ;",
+    "- il ignore une contre-preuve significative présente dans le contexte.",
+    "",
+    "APPROUVE seulement si le statut est défendable après cette attaque.",
+    "Pour VERIFIED_DEFECT, exige une causalité technique suffisamment explicite.",
+    "Pour INDETERMINATE, considère le diagnostic acceptable même si la réponse ne produit aucun bug : l'incertitude est un résultat valide.",
+    "Retourne uniquement le JSON du schéma fourni.",
+  ].join("\n");
+}
+
+async function reviewProjectAskDiagnosis(
+  context: ProjectAiContext,
+  question: string,
+  diagnosis: ProjectAskDiagnosis,
+): Promise<{ approved: boolean; issues: string[] }> {
+  const raw = await requestProjectAskStructured(
+    buildProjectAskDiagnosisReviewInput(context, question, diagnosis),
+    buildProjectAskDiagnosisReviewInstructions(),
+    PROJECT_ASK_DIAGNOSIS_REVIEW_SCHEMA,
+  );
+
+  const parsed = parseJsonObject(raw);
+
+  if (!parsed || typeof parsed !== "object") {
+    throw new Error("Le reviewer du diagnostic de /project-ask n'a pas renvoyé de JSON exploitable.");
+  }
+
+  const value = parsed as Record<string, unknown>;
+
+  if (typeof value.approved !== "boolean" || !Array.isArray(value.issues)) {
+    throw new Error("Le reviewer du diagnostic de /project-ask est invalide.");
+  }
+
+  return {
+    approved: value.approved,
+    issues: value.issues.filter(
+      (item): item is string => typeof item === "string",
+    ),
+  };
+}
+
+function buildProjectAskInstructions(
+  mode: ProjectAskMode,
+  diagnosis: ProjectAskDiagnosis | null = null,
+): string {
   const common = [
     "Tu es l'assistant de décision de Project OS.",
     "Ta mission est de répondre à UNE question précise sur un projet.",
@@ -1685,6 +1936,14 @@ function buildProjectAskInstructions(mode: ProjectAskMode): string {
     "Ne réponds pas à une question différente de celle contenue dans le champ question.",
     "Ne transforme pas une absence de fonctionnalité en problème simplement parce qu'elle est absente.",
     "Ne propose pas plusieurs options de roadmap quand une seule réponse est demandée.",
+    ...(diagnosis
+      ? [
+          "",
+          "DIAGNOSTIC VALIDÉ PAR LE PIPELINE :",
+          JSON.stringify(diagnosis),
+          "Tu dois respecter ce diagnostic. Ne réintroduis pas dans la réponse finale une hypothèse que le diagnostic a rejetée ou classée INDETERMINATE.",
+        ]
+      : []),
   ];
 
   if (mode === "PLANNING") {
@@ -2052,83 +2311,172 @@ export async function askProjectWithAI(
   question: string,
 ): Promise<string> {
   const mode = await classifyProjectAskMode(context, question);
-  const input = buildProjectAskInput(context, question, mode);
-  const instructions = buildProjectAskInstructions(mode);
-  const schema = getProjectAskSchema(mode);
 
+  if (mode !== "PLANNING") {
+    const input = buildProjectAskInput(context, question, mode);
+    const instructions = buildProjectAskInstructions(mode);
+    const schema = getProjectAskSchema(mode);
+    const raw = await requestProjectAskStructured(
+      input,
+      instructions,
+      schema,
+    );
+    const result = parseProjectAskResult(raw, mode);
+    return renderProjectAskResult(result, mode);
+  }
+
+  let diagnosisRaw = await requestProjectAskStructured(
+    buildProjectAskDiagnosisInput(context, question),
+    buildProjectAskDiagnosisInstructions(),
+    PROJECT_ASK_DIAGNOSIS_SCHEMA,
+  );
+  let diagnosis = parseProjectAskDiagnosis(diagnosisRaw);
+
+  let diagnosisReview = await reviewProjectAskDiagnosis(
+    context,
+    question,
+    diagnosis,
+  );
+
+  if (!diagnosisReview.approved) {
+    diagnosisRaw = await requestProjectAskStructured(
+      JSON.stringify({
+        ...JSON.parse(buildProjectAskDiagnosisInput(context, question)),
+        rejected_diagnosis: diagnosis,
+        reviewer_issues: diagnosisReview.issues,
+      }),
+      [
+        buildProjectAskDiagnosisInstructions(),
+        "",
+        "LE PREMIER DIAGNOSTIC A ÉTÉ REJETÉ PAR UN REVIEWER ADVERSARIAL.",
+        ...diagnosisReview.issues.map((issue) => "- " + issue),
+        "",
+        "Reconstruis le diagnostic depuis les preuves, sans défendre artificiellement le brouillon précédent.",
+        "Tu peux choisir INDETERMINATE. Il vaut mieux une réponse indéterminée qu'un bug inventé.",
+      ].join("\n"),
+      PROJECT_ASK_DIAGNOSIS_SCHEMA,
+    );
+
+    diagnosis = parseProjectAskDiagnosis(diagnosisRaw);
+    diagnosisReview = await reviewProjectAskDiagnosis(
+      context,
+      question,
+      diagnosis,
+    );
+  }
+
+  if (!diagnosisReview.approved) {
+    const files = context.selected_files
+      .filter((file) => !file.truncated)
+      .slice(0, 4)
+      .map((file) => file.path);
+
+    return renderProjectAskResult(
+      {
+        title: "Diagnostic insuffisant pour choisir une modification",
+        why_now:
+          "Le contexte actuel ne permet pas de valider un diagnostic technique suffisamment solide pour recommander une modification précise.",
+        files,
+        expected:
+          "Inspecter le comportement ou les fichiers manquants avant de créer une nouvelle tâche.",
+        success:
+          "Une chaîne causale complète et vérifiable relie le comportement observé à la modification proposée.",
+        evidence: diagnosisReview.issues.map(
+          (issue) => "DIAGNOSTIC REVIEW: " + issue,
+        ),
+      },
+      "PLANNING",
+    );
+  }
+
+  const input = buildProjectAskInput(context, question, "PLANNING");
+  const instructions = buildProjectAskInstructions("PLANNING", diagnosis);
+  const schema = PROJECT_ASK_PLANNING_SCHEMA;
   let raw = await requestProjectAskStructured(
-    input,
+    JSON.stringify({
+      ...JSON.parse(input),
+      diagnosis,
+    }),
     instructions,
     schema,
   );
-  let result = parseProjectAskResult(raw, mode);
+  let result = parseProjectAskResult(raw, "PLANNING");
 
-  if (mode === "PLANNING") {
-    let grounding = await verifyProjectAskPlanning(
+  let grounding = await verifyProjectAskPlanning(
+    context,
+    question,
+    result,
+  );
+
+  if (!grounding.grounded) {
+    const repairInstructions = [
+      instructions,
+      "",
+      "CONTRÔLE DE GROUNDING ÉCHOUÉ.",
+      "Le brouillon précédent contenait des affirmations insuffisamment démontrées.",
+      "Problèmes détectés :",
+      ...grounding.issues.map((issue) => "- " + issue),
+      "",
+      "Réécris uniquement à partir du diagnostic validé et des preuves fournies.",
+      "Ne transforme jamais une hypothèse rejetée en bug.",
+      "Si le diagnostic est INDETERMINATE, la réponse finale doit rester conservatrice.",
+    ].join("\n");
+
+    raw = await requestProjectAskStructured(
+      JSON.stringify({
+        ...JSON.parse(input),
+        diagnosis,
+      }),
+      repairInstructions,
+      schema,
+    );
+    result = parseProjectAskResult(raw, "PLANNING");
+
+    grounding = await verifyProjectAskPlanning(
       context,
       question,
-      result as ProjectAskPlanning,
+      result,
     );
-
-    if (!grounding.grounded) {
-      const repairInstructions = [
-        instructions,
-        "",
-        "CONTRÔLE DE GROUNDING ÉCHOUÉ.",
-        "Le brouillon précédent contenait des affirmations insuffisamment démontrées.",
-        "Problèmes détectés :",
-        ...grounding.issues.map((issue) => "- " + issue),
-        "",
-        "Réécris la proposition en retirant toute affirmation non démontrable.",
-        "Ne transforme jamais une hypothèse en BUG.",
-        "Si le contexte ne permet pas de prouver un comportement manquant ou incorrect, propose une vérification ciblée ou une modification dont la nécessité est directement démontrable.",
-      ].join("\n");
-
-      raw = await requestProjectAskStructured(
-        input,
-        repairInstructions,
-        schema,
-      );
-      result = parseProjectAskResult(raw, mode);
-
-      grounding = await verifyProjectAskPlanning(
-        context,
-        question,
-        result as ProjectAskPlanning,
-      );
-
-      if (!grounding.grounded) {
-        const conservativeFiles = context.selected_files
-          .filter((file) => !file.truncated)
-          .slice(0, 3)
-          .map((file) => file.path);
-
-        return renderProjectAskResult(
-          {
-            title: "Vérifier avant de modifier",
-            why_now:
-              "Le contexte GitHub fourni ne permet pas de démontrer avec suffisamment de certitude une prochaine modification précise sans risque d'inventer un comportement.",
-            files: conservativeFiles,
-            expected:
-              "Identifier dans le code complet la responsabilité exacte du comportement à modifier avant de créer la tâche.",
-            success:
-              "La responsabilité et le comportement à modifier sont confirmés directement dans les fichiers concernés.",
-            evidence:
-              grounding.issues.length > 0
-                ? grounding.issues.map(
-                    (issue) => "GROUNDING: " + issue,
-                  )
-                : [
-                    "GROUNDING: la proposition n'a pas pu être démontrée à partir du contexte actuel.",
-                  ],
-          },
-          mode,
-        );
-      }
-    }
   }
 
-  return renderProjectAskResult(result, mode);
+  if (!grounding.grounded) {
+    const conservativeFiles = context.selected_files
+      .filter((file) => !file.truncated)
+      .slice(0, 4)
+      .map((file) => file.path);
+
+    return renderProjectAskResult(
+      {
+        title:
+          diagnosis.status === "INDETERMINATE"
+            ? "Vérifier avant de modifier"
+            : "Proposition insuffisamment démontrée",
+        why_now:
+          diagnosis.unknowns.length > 0
+            ? diagnosis.unknowns.join(" ")
+            : "La proposition finale n'a pas pu être démontrée avec suffisamment de certitude à partir du contexte actuel.",
+        files:
+          diagnosis.files.length > 0
+            ? diagnosis.files
+            : conservativeFiles,
+        expected:
+          "Confirmer le comportement et sa chaîne causale dans le code complet avant de modifier le projet.",
+        success:
+          "La modification proposée est directement reliée à un comportement démontré ou à une tâche active vérifiée.",
+        evidence:
+          diagnosis.counterevidence.length > 0
+            ? diagnosis.counterevidence.map(
+                (item) => "CONTRE-PREUVE: " + item,
+              )
+            : grounding.issues.map(
+                (issue) => "GROUNDING: " + issue,
+              ),
+      },
+      "PLANNING",
+    );
+  }
+
+  return renderProjectAskResult(result, "PLANNING");
 }
 
 export async function reviewProjectWithAI(
