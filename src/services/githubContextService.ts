@@ -83,8 +83,8 @@ const MAX_TREE_ENTRIES = 250;
 const MAX_SELECTED_FILES = 12;
 const MAX_FILE_CHARS = 8000;
 const MAX_PLANNING_CODE_FILE_CHARS = 12000;
-const MAX_TOTAL_FILE_CHARS = 50000;
-const MAX_PROJECT_DOCUMENT_CHARS = 46000;
+const MAX_TOTAL_FILE_CHARS = 60000;
+const MAX_PROJECT_DOCUMENT_CHARS = 60000;
 
 const CORE_PLANNING_PATHS = [
   "scripts/main.gd",
@@ -432,12 +432,12 @@ function extractProjectJournal(
       {
         path,
         kind: "JOURNAL_DESIGN",
-        content: selectHeadTail(design, 20000),
+        content: selectHeadTail(design, 26000),
       },
       {
         path,
         kind: "JOURNAL_AUDIT",
-        content: selectHeadTail(audit, 26000),
+        content: selectHeadTail(audit, 42000),
       },
     ];
   }
@@ -764,7 +764,7 @@ export async function getGithubRepositoryContext(
       {
         path: item.path,
         kind: "PROJECT_DOCUMENT" as const,
-        content: selectHeadTail(raw, 12000),
+        content: selectHeadTail(raw, 18000),
       },
     ];
   });
