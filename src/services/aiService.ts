@@ -25,6 +25,18 @@ type OllamaThinkLevel =
   | "high"
   | "max";
 
+type CloudflareChatChoice = {
+  message?: {
+    content?:
+      | string
+      | Array<{
+          text?: string;
+          type?: string;
+        }>
+      | null;
+  };
+};
+
 type CloudflareChatResponse = {
   success?: boolean;
   errors?: Array<{
@@ -32,12 +44,15 @@ type CloudflareChatResponse = {
     message?: string;
   }>;
   result?: {
-    response?: string;
-    choices?: Array<{
-      message?: {
-        content?: string | null;
-      };
-    }>;
+    response?:
+      | string
+      | {
+          response?: string;
+          choices?: CloudflareChatChoice[];
+          [key: string]: unknown;
+        };
+    choices?: CloudflareChatChoice[];
+    [key: string]: unknown;
   };
 };
 
