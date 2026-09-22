@@ -3,15 +3,19 @@ export type ActivityType =
   | "TASK_CREATED"
   | "TASK_STARTED"
   | "TASK_COMPLETED"
+  | "TASK_DELETED"
   | "STATUS_CHANGED"
   | "NOTE_ADDED"
   | "DECISION_CREATED"
+  | "DECISION_STATUS_CHANGED"
   | "PR_OPENED"
   | "PR_UPDATED"
   | "PR_MERGED"
   | "COMMIT"
   | "RELEASE"
-  | "AI_REVIEW";
+  | "AI_REVIEW"
+  | "AI_TASK_CREATED"
+  | "AI_TASK_IGNORED";
 
 export type Activity = {
   id: string;

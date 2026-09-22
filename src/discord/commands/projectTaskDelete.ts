@@ -4,15 +4,13 @@ import {
   SlashCommandBuilder,
 } from "discord.js";
 
-import {
-  completeTask,
-  getTasks,
-} from "../../services/taskService.js";
+import { getProjects } from "../../services/projectService.js";
+import { deleteTask, getTasks } from "../../services/taskService.js";
 
-export const projectDoneCommand = {
+export const projectTaskDeleteCommand = {
   data: new SlashCommandBuilder()
-    .setName("project-done")
-    .setDescription("Termine une tâche")
+    .setName("project-task-delete")
+    .setDescription("Supprime une tâche Project OS")
     .addStringOption((option) =>
       option
         .setName("projet")
@@ -23,14 +21,31 @@ export const projectDoneCommand = {
     .addStringOption((option) =>
       option
         .setName("tache")
-        .setDescription("Tâche à terminer")
+        .setDescription("Tâche à supprimer")
         .setRequired(true)
         .setAutocomplete(true),
+    )
+    .addStringOption((option) =>
+      option
+        .setName("confirmation")
+        .setDescription("Tape SUPPRIMER pour confirmer")
+        .setRequired(true),
     ),
 
   async execute(interaction: ChatInputCommandInteraction): Promise<void> {
     const projectId = interaction.options.getString("projet", true);
     const taskId = interaction.options.getString("tache", true);
+    const confirmation = interaction.options
+      .getString("confirmation", true)
+      .trim()
+      .toUpperCase();
+
+    if (confirmation !== "SUPPRIMER") {
+      await interaction.reply(
+        "Suppression annulée. Tape **SUPPRIMER** pour confirmer.",
+      );
+      return;
+    }
 
     const tasks = await getTasks(projectId);
     const task = tasks.find((item) => item.id === taskId);
@@ -42,10 +57,10 @@ export const projectDoneCommand = {
       return;
     }
 
-    const completedTask = await completeTask(task.id);
+    const deletedTask = await deleteTask(task.id);
 
     await interaction.reply(
-      `Tâche terminée dans le projet : **${completedTask.title}**`,
+      `Tâche supprimée dans le projet : **${deletedTask.title}**`,
     );
   },
 
@@ -54,9 +69,6 @@ export const projectDoneCommand = {
       const focused = interaction.options.getFocused(true);
 
       if (focused.name === "projet") {
-        const { getProjects } =
-          await import("../../services/projectService.js");
-
         const projects = await getProjects();
 
         const choices = projects
@@ -87,7 +99,6 @@ export const projectDoneCommand = {
         const tasks = await getTasks(projectId);
 
         const choices = tasks
-          .filter((task) => task.status !== "DONE")
           .filter((task) =>
             task.title.toLowerCase().includes(focused.value.toLowerCase()),
           )
@@ -106,8 +117,7 @@ export const projectDoneCommand = {
 
       await interaction.respond([]);
     } catch (error) {
-      console.error("Erreur autocomplete project-done :", error);
-
+      console.error("Erreur autocomplete project-task-delete :", error);
       await interaction.respond([]);
     }
   },

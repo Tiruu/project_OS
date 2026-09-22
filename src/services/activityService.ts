@@ -15,6 +15,24 @@ export async function getActivities(projectId: string): Promise<Activity[]> {
   return data;
 }
 
+export async function getActivity(
+  activityId: string,
+): Promise<Activity | null> {
+  const { data, error } = await supabase
+    .from("activities")
+    .select("*")
+    .eq("id", activityId)
+    .maybeSingle();
+
+  if (error) {
+    throw new Error(
+      `Impossible de récupérer l'activité : ${error.message}`,
+    );
+  }
+
+  return data;
+}
+
 export async function createActivity(
   input: CreateActivityInput,
 ): Promise<Activity> {
