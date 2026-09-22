@@ -15,6 +15,7 @@ import type { Decision } from "../types/decision.js";
 import type { Task } from "../types/task.js";
 
 export type ProjectAiContext = GithubRepositoryContext & {
+  repositories: GithubRepositoryContext[];
   project_os: {
     project: {
       id: string;
@@ -164,23 +165,33 @@ export async function getProjectAiContext(
     throw new Error("Ce projet n'a aucun dépôt GitHub connecté.");
   }
 
-  const repository = repositories[0];
-
-  const [project, tasks, decisions, activities, github] =
-    await Promise.all([
-      getProject(projectId),
-      getTasks(projectId),
-      getDecisions(projectId),
-      getActivities(projectId),
+  const githubContexts = await Promise.all(
+    repositories.map((repository) =>
       getGithubRepositoryContext(
         repository.owner,
         repository.repository,
         focusText,
       ),
+    ),
+  );
+
+  const github = githubContexts[0];
+
+  if (!github) {
+    throw new Error("Impossible de construire le contexte GitHub du projet.");
+  }
+
+  const [project, tasks, decisions, activities] =
+    await Promise.all([
+      getProject(projectId),
+      getTasks(projectId),
+      getDecisions(projectId),
+      getActivities(projectId),
     ]);
 
   return {
     ...github,
+    repositories: githubContexts,
     project_os: {
       project: {
         id: project.id,
