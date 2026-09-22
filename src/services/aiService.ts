@@ -1183,11 +1183,16 @@ async function callCloudflare(
   maxTokens: number,
   temperature: number,
 ): Promise<CloudflareChatResponse> {
+  const modelPath = model
+    .split("/")
+    .map((segment) => encodeURIComponent(segment))
+    .join("/");
+
   const url =
     "https://api.cloudflare.com/client/v4/accounts/" +
     encodeURIComponent(accountId) +
     "/ai/run/" +
-    encodeURIComponent(model);
+    modelPath;
 
   let response: Response;
 
