@@ -1855,6 +1855,33 @@ function isPlanningQuestion(question: string): boolean {
   ].some((phrase) => text.includes(phrase));
 }
 
+function isProjectAnalysisQuestion(question: string): boolean {
+  const text = question.toLowerCase();
+
+  return [
+    "qu'est-ce que tu penses",
+    "qu est-ce que tu penses",
+    "qu'est ce que tu penses",
+    "que penses-tu",
+    "que penses tu",
+    "ton avis",
+    "ton diagnostic",
+    "analyse le projet",
+    "analyse mon projet",
+    "analyse du projet",
+    "où en est le projet",
+    "ou en est le projet",
+    "état du projet",
+    "etat du projet",
+    "fais le point",
+    "fait le point",
+    "what do you think",
+    "give me your take",
+    "analyze the project",
+    "project status",
+  ].some((phrase) => text.includes(phrase));
+}
+
 type CurrentPlanningPriority = {
   id: string;
   title: string;
@@ -2592,6 +2619,7 @@ function buildProjectCompanionInput(
       : [context];
 
   const planningRequest = isPlanningQuestion(question);
+  const projectAnalysisRequest = isProjectAnalysisQuestion(question);
   const currentDossier = buildCurrentProjectDossier(
     context,
     planningRequest,
@@ -2630,6 +2658,7 @@ function buildProjectCompanionInput(
     PROJECT_COMPANION_REQUEST: {
       user_request: question,
       is_planning_request: planningRequest,
+      is_project_analysis_request: projectAnalysisRequest,
     },
 
     PROJECT_MEMORY: {
@@ -2810,6 +2839,16 @@ function buildProjectCompanionInstructions(): string {
     "Si PROJECT_COMPANION_REQUEST.is_planning_request est true, donne au moins une recommandation concrète.",
     "La recommandation principale doit être cohérente avec la phase réelle du projet et les priorités actuelles.",
     "Donne une estimation honnête et explique brièvement ce que l'utilisateur doit observer ou valider.",
+    "",
+    "POUR LES DEMANDES D'ANALYSE OU D'AVIS SUR LE PROJET :",
+    "Si PROJECT_COMPANION_REQUEST.is_project_analysis_request est true, ne te contente jamais de reformuler l'état administratif ou de réciter la roadmap.",
+    "Réponds comme un compagnon qui connaît le projet : formule d'abord un diagnostic synthétique et concret dans answer.",
+    "project_state doit décrire où se situe réellement le projet dans son cycle et quels éléments du contexte l'étayent.",
+    "Utilise problems pour 0 à 3 problèmes ou risques réellement étayés par les sources ; un risque purement théorique ne suffit pas.",
+    "Utilise recommendations pour 1 à 3 directions concrètes quand elles découlent du contexte.",
+    "Sépare clairement les faits observés de ton jugement stratégique : une recommandation nouvelle est un avis, pas un fait du projet.",
+    "Utilise unknowns pour les inconnues qui empêchent encore un diagnostic ou une décision sûre.",
+    "Évite les phrases vides comme 'le projet est bien avancé' sans expliquer ce qui le démontre.",
     "",
     "POUR LES DEMANDES SIMPLES :",
     "Réponds simplement. Les sections état/directions/problèmes sont facultatives sauf si la question nécessite une analyse de projet.",
@@ -3458,6 +3497,7 @@ export async function askProjectWithAI(
               "Utilise uniquement un source présent exactement dans EVIDENCE_SOURCES.sources.",
               "Copie verbatim dans excerpt un passage de 8 à 500 caractères provenant de cette même source.",
               "Pour une demande de prochaine étape, donne au moins une direction concrète cohérente avec les priorités actuelles.",
+              "Pour une demande d'analyse ou d'avis, donne un diagnostic concret, au moins une direction utile et signale les risques réellement étayés quand il y en a.",
               "Ne renvoie pas seulement une opinion générale ou une direction sans preuve.",
             ].join(" ")
           : "",
