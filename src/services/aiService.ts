@@ -2668,7 +2668,9 @@ function buildProjectCompanionInput(
 
     PRIMARY_PROJECT_DOSSIER: {
       meaning:
-        "Section prioritaire. Pour une demande de prochaine étape, elle fait foi sur la phase du projet et ses priorités actuelles, sauf preuve plus récente et explicite dans PROJECT_MEMORY.",
+        projectAnalysisRequest
+          ? "Contexte de référence. Pour une demande d'analyse ou d'avis, utilise cette section pour comprendre la phase, l'historique et les priorités du projet, mais ne la récite pas comme réponse et ne transforme pas automatiquement une priorité en recommandation principale."
+          : "Section prioritaire. Pour une demande de prochaine étape, elle fait foi sur la phase du projet et ses priorités actuelles, sauf preuve plus récente et explicite dans PROJECT_MEMORY.",
       current_state_and_priorities: currentDossier,
     },
 
@@ -2698,6 +2700,21 @@ function buildProjectCompanionInput(
       meaning:
         "Liste canonique des identifiants réellement visibles dans PRIMARY_PROJECT_DOSSIER. Recopie exactement un identifiant présent ici dans evidence.source.",
       sources: evidenceSources,
+    },
+
+    ANALYSIS_MODE_GUIDANCE: projectAnalysisRequest
+      ? {
+          rule:
+            "Tu es en mode analyse. N'utilise pas la priorité P0 comme réponse à la question sauf si elle est directement pertinente au diagnostic. Ne réponds jamais simplement 'la prochaine étape est...' à une demande d'avis ou d'état.",
+          required_focus: [
+            "diagnostic concret fondé sur le code et le journal",
+            "faits réellement observés",
+            "risques ou problèmes étayés lorsqu'il y en a",
+            "1 à 3 directions utiles",
+            "inconnues qui empêchent encore une conclusion",
+          ],
+        }
+      : null,
     },
 
     REPOSITORY_OVERVIEW: repositoryOverview,
@@ -3023,6 +3040,7 @@ function parseProjectCompanionResponse(
   const evidenceIndex = buildCompanionEvidenceIndex(context);
 
   const planningRequest = isPlanningQuestion(question);
+  const projectAnalysisRequest = isProjectAnalysisQuestion(question);
 
   if (
     typeof value.answer !== "string" ||
@@ -3186,6 +3204,17 @@ function parseProjectCompanionResponse(
   if (planningRequest && recommendations.length === 0) {
     throw new Error(
       "La réponse du compagnon ne contient aucune direction pour une demande de prochaine étape.",
+    );
+  }
+
+  if (
+    projectAnalysisRequest &&
+    /^la prochaine étape\b/i.test(answer.trim()) &&
+    problems.length === 0 &&
+    recommendations.length <= 1
+  ) {
+    throw new Error(
+      "La réponse d'analyse a dérivé vers une réponse de planning sans diagnostic.",
     );
   }
 
@@ -3497,7 +3526,8 @@ export async function askProjectWithAI(
               "Utilise uniquement un source présent exactement dans EVIDENCE_SOURCES.sources.",
               "Copie verbatim dans excerpt un passage de 8 à 500 caractères provenant de cette même source.",
               "Pour une demande de prochaine étape, donne au moins une direction concrète cohérente avec les priorités actuelles.",
-              "Pour une demande d'analyse ou d'avis, donne un diagnostic concret, au moins une direction utile et signale les risques réellement étayés quand il y en a.",
+              "Pour une demande d'analyse ou d'avis, donne un diagnostic concret fondé sur le code et le journal, puis 1 à 3 directions et les risques réellement étayés quand il y en a.",
+              "En mode analyse, ne commence pas par 'La prochaine étape est...' et ne transforme pas la priorité P0 en réponse complète.",
               "Ne renvoie pas seulement une opinion générale ou une direction sans preuve.",
             ].join(" ")
           : "",
