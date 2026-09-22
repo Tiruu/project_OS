@@ -3544,7 +3544,8 @@ export async function askProjectWithAI(
         if (
           message.includes("json exploitable") ||
           message.includes("contrat attendu") ||
-          message.includes("réponse du compagnon")
+          message.includes("réponse du compagnon") ||
+          message.includes("a dérivé vers une réponse de planning")
         ) {
           continue;
         }
