@@ -1267,23 +1267,81 @@ async function callCloudflare(
 function getCloudflareContent(
   response: CloudflareChatResponse,
 ): string {
-  const direct = response.result?.response?.trim();
+  const result = response.result;
 
-  if (direct) {
-    return direct;
+  if (!result || typeof result !== "object") {
+    return "";
   }
 
-  return (
-    response.result?.choices
-      ?.flatMap((choice) =>
-        typeof choice.message?.content === "string"
-          ? [choice.message.content.trim()]
-          : [],
-      )
-      .filter(Boolean)
-      .join("\n")
-      .trim() || ""
-  );
+  const responseValue = result.response;
+
+  if (typeof responseValue === "string") {
+    return responseValue.trim();
+  }
+
+  if (
+    responseValue &&
+    typeof responseValue === "object" &&
+    "response" in responseValue &&
+    typeof responseValue.response === "string"
+  ) {
+    return responseValue.response.trim();
+  }
+
+  const choices =
+    responseValue &&
+    typeof responseValue === "object" &&
+    "choices" in responseValue &&
+    Array.isArray(responseValue.choices)
+      ? responseValue.choices
+      : "choices" in result && Array.isArray(result.choices)
+        ? result.choices
+        : [];
+
+  return choices
+    .flatMap((choice) => {
+      if (!choice || typeof choice !== "object") {
+        return [];
+      }
+
+      const message =
+        "message" in choice && choice.message &&
+        typeof choice.message === "object"
+          ? choice.message
+          : null;
+
+      const content =
+        message &&
+        "content" in message
+          ? message.content
+          : null;
+
+      if (typeof content === "string") {
+        return [content.trim()];
+      }
+
+      if (Array.isArray(content)) {
+        return content
+          .flatMap((part) => {
+            if (
+              part &&
+              typeof part === "object" &&
+              "text" in part &&
+              typeof part.text === "string"
+            ) {
+              return [part.text.trim()];
+            }
+
+            return [];
+          })
+          .filter(Boolean);
+      }
+
+      return [];
+    })
+    .filter(Boolean)
+    .join("\n")
+    .trim();
 }
 
 async function requestCloudflareStructured(
