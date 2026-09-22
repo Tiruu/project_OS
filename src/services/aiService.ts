@@ -2715,7 +2715,6 @@ function buildProjectCompanionInput(
           ],
         }
       : null,
-    },
 
     REPOSITORY_OVERVIEW: repositoryOverview,
 
