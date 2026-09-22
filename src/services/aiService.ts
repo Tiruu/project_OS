@@ -1838,16 +1838,13 @@ function compactCompanionText(
 }
 
 function isPlanningQuestion(question: string): boolean {
-  const text = question.toLowerCase();
+  const text = normalizeCompanionSearchText(question);
 
   return [
-    "suite du développement",
     "suite du developpement",
     "quoi faire ensuite",
     "que faire ensuite",
-    "prochaine étape",
     "prochaine etape",
-    "prochaine tâche",
     "prochaine tache",
     "next step",
     "next task",
@@ -1856,22 +1853,17 @@ function isPlanningQuestion(question: string): boolean {
 }
 
 function isProjectAnalysisQuestion(question: string): boolean {
-  const text = question.toLowerCase();
+  const text = normalizeCompanionSearchText(question);
 
   return [
-    "qu'est-ce que tu penses",
-    "qu est-ce que tu penses",
-    "qu'est ce que tu penses",
-    "que penses-tu",
+    "qu est ce que tu penses",
     "que penses tu",
     "ton avis",
     "ton diagnostic",
     "analyse le projet",
     "analyse mon projet",
     "analyse du projet",
-    "où en est le projet",
     "ou en est le projet",
-    "état du projet",
     "etat du projet",
     "fais le point",
     "fait le point",
